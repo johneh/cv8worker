@@ -292,6 +292,37 @@ static void Close(const FunctionCallbackInfo<Value>& args) {
     mill_pipeclose(vm->inq);
 }
 
+// $eval(string, origin) -- Must compile and run.
+static void EvalString(const FunctionCallbackInfo<Value>& args) {
+    Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
+
+    int argc = args.Length();
+    if (argc < 2 || !args[0]->IsString()) {
+        fprintf(stderr, "$eval: invalid argument(s)\n");
+        exit(1);
+    }
+    Local<Context> context = isolate->GetCurrentContext();
+    TryCatch try_catch(isolate);
+    Local<String> source = Local<String>::Cast(args[0]);
+    Local<String> name;
+    if (!args[1]->ToString(context).ToLocal(&name)) {
+        Panic(isolate, &try_catch);    
+    }
+
+    ScriptOrigin origin(name);
+    Local<Script> script;
+    if (!Script::Compile(context, source, &origin).ToLocal(&script)) {
+        Panic(isolate, &try_catch);
+    }
+    Local<Value> result;
+    if (!script->Run(context).ToLocal(&result)) {
+        Panic(isolate, &try_catch);
+    }
+    assert(!result.IsEmpty());
+    args.GetReturnValue().Set(result);
+}
+
 static void CallForeignFunc(
         const v8::FunctionCallbackInfo<v8::Value>& args) {
 
@@ -506,6 +537,8 @@ static void CreateIsolate(js_vm *vm) {
                 FunctionTemplate::New(isolate, Send));
     global->Set(String::NewFromUtf8(isolate, "$close"),
                 FunctionTemplate::New(isolate, Close));
+    global->Set(String::NewFromUtf8(isolate, "$eval"),
+                FunctionTemplate::New(isolate, EvalString));
 
     Local<Context> context = Context::New(isolate, NULL, global);
     if (context.IsEmpty()) {
