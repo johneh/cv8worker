@@ -201,6 +201,38 @@ $print(ia); return ia;});\n", NULL, (js_args) { h2 });
     free(p1);   // no references to the array buffer left(?) or needed.
 }
 
+static int free_count;
+js_handle *ff_efree(js_vm *vm, int argc, js_handle *argv[]) {
+    void *ptr = js_topointer(argv[0]);
+    free(ptr);
+    free_count++;
+    return NULL;
+}
+
+void efree(void *ptr) {
+    free(ptr);
+    free_count++;
+}
+
+static js_ffn fe = {1, ff_efree };
+
+void testdispose(js_vm *vm) {
+    js_handle *h1 = js_cfunc(vm, &fe);
+    int rc = js_set(JSGLOBAL(vm), "efree", h1);
+    js_reset(h1);
+    assert(rc);
+    js_handle *p0 = js_pointer(vm, malloc(1));
+    js_handle *h2 = js_callstr(vm, "(function(p0) {\n\
+var p1 = $malloc(4);\n\
+p1.free();p1=$malloc(8);p1.dispose(efree);});",
+        NULL, (js_args) {p0});
+    CHECK(h2, vm);
+    js_reset(h2);
+    js_dispose(p0, efree);
+    js_gc(vm);
+    assert(free_count == 2);
+}
+
 int main(int argc, char *argv[]) {
     mill_init(-1, 0);
     mill_worker w = mill_worker_create();
@@ -211,6 +243,7 @@ int main(int argc, char *argv[]) {
     testexports(vm);
     testsend(vm);
     testarraybuffer(vm);
+    testdispose(vm);
 
     js_vmclose(vm);
     mill_worker_delete(w);

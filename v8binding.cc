@@ -76,6 +76,8 @@ static js_handle *init_handle(js_vm *vm,
 static inline js_handle *make_handle(js_vm *vm,
             Local<Value> value, enum js_code type);
 static void *ExternalPtrValue(js_vm *vm, Local <Value> v);
+static void WeakPtrCallback(
+        const v8::WeakCallbackInfo<js_handle> &data);
 
 static void js_set_errstr(js_vm *vm, const char *str) {
     if (vm->errstr) {
@@ -323,6 +325,42 @@ static void EvalString(const FunctionCallbackInfo<Value>& args) {
     args.GetReturnValue().Set(result);
 }
 
+// FIXME use this in js_pointer()
+static Local<Object> WrapPtr(js_vm *vm, void *ptr) {
+    Isolate *isolate = vm->isolate;
+    assert(Locker::IsLocked(isolate));
+    // Local scope for temporary handles.
+    EscapableHandleScope handle_scope(isolate);
+    Local<ObjectTemplate> templ =
+        Local<ObjectTemplate>::New(isolate, vm->extptr_template);
+    Local<Object> obj = templ->NewInstance(
+                    isolate->GetCurrentContext()).ToLocalChecked();
+    int oid = (V8EXTPTR<<2);
+    obj->SetAlignedPointerInInternalField(0,
+             reinterpret_cast<void*>(static_cast<uintptr_t>(oid)));
+    obj->SetInternalField(1, External::New(isolate, ptr));
+    obj->SetPrototype(Local<Value>::New(isolate, vm->ctype_proto));
+    return handle_scope.Escape(obj);
+}
+
+// malloc(size [, zerofill])
+static void Malloc(const v8::FunctionCallbackInfo<v8::Value>& args) {
+    int argc = args.Length();
+    Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
+    ThrowNotEnoughArgs(isolate, argc < 1);
+    Local<Context> context = isolate->GetCurrentContext();
+    int size = args[0]->Int32Value(context).FromJust();
+    if (size <= 0)
+        ThrowError(isolate, "$malloc: invalid size argument");
+    void *ptr = emalloc(size);
+    if (argc > 1 && args[1]->BooleanValue(context).FromJust())
+        memset(ptr, '\0', size);
+    Local<Object> obj = WrapPtr(
+            static_cast<js_vm*>(isolate->GetData(0)), ptr);
+    args.GetReturnValue().Set(obj);
+}
+
 static void CallForeignFunc(
         const v8::FunctionCallbackInfo<v8::Value>& args) {
 
@@ -501,6 +539,72 @@ static void Ctype(const FunctionCallbackInfo<Value>& args) {
         args.GetReturnValue().Set(String::NewFromUtf8(isolate, "C-function"));
 }
 
+/*
+ *  ptr.dispose() => use free() as the finalizer.
+ *  ptr.dispose(finalizer_function).
+ */
+static void Dispose(const FunctionCallbackInfo<Value>& args) {
+    int argc = args.Length();
+    Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
+    Local <Object> obj = args.Holder();
+    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
+    if (GetCtypeId(vm, obj) != V8EXTPTR)
+        ThrowTypeError(isolate, "dispose: not a C-pointer");
+    void *ptr = Local<External>::Cast(obj->GetInternalField(1))->Value();
+    if (!ptr || IsCtypeWeak(obj))
+        return;
+
+    js_handle *h = make_handle(vm, obj, V8EXTPTR);
+    h->ptr = ptr;
+    if (argc == 0) {
+        h->free_func = free;
+        h->flags |= WEAK_HANDLE;
+    } else if (GetCtypeId(vm, args[0]) == V8EXTFUNC) {
+        js_ffn *func_wrap = static_cast<js_ffn *>(
+                Local<External>::Cast(
+                        Local<Object>::Cast(args[0])->GetInternalField(1)
+                    )->Value()
+            );
+        if (func_wrap->pcount == 1) {
+            h->free_wrap = func_wrap->fp;
+            h->flags |= (FREE_WRAP|WEAK_HANDLE);
+        }
+    }
+    if (!(h->flags & WEAK_HANDLE)) {
+        h->handle.Reset();
+        delete h;
+        ThrowError(isolate, "dispose: invalid argument");
+    }
+    int oid = (V8EXTPTR<<2)|(1<<1);
+    obj->SetAlignedPointerInInternalField(0,
+                reinterpret_cast<void*>(static_cast<uintptr_t>(oid)));
+    h->handle.SetWeak(h, WeakPtrCallback, WeakCallbackType::kParameter);
+    h->handle.MarkIndependent();
+}
+
+static void Free(const FunctionCallbackInfo<Value>& args) {
+    int argc = args.Length();
+    Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
+    Local <Object> obj = args.Holder();
+    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
+    if (GetCtypeId(vm, obj) != V8EXTPTR)
+        ThrowTypeError(isolate, "free: not a C-pointer");
+    void *ptr = Local<External>::Cast(obj->GetInternalField(1))->Value();
+    if (!ptr || IsCtypeWeak(obj))
+        return;
+    if (argc == 0) {
+        free(ptr);
+        ptr = nullptr;
+    } /* else if (GetCtypeId(vm, args[0]) == V8EXTFUNC) {
+
+    } */
+
+    if (!ptr)
+        obj->SetInternalField(1, External::New(isolate, nullptr));
+}
+
 // The second part of the vm initialization.
 static void CreateIsolate(js_vm *vm) {
     v8init();
@@ -539,6 +643,8 @@ static void CreateIsolate(js_vm *vm) {
                 FunctionTemplate::New(isolate, Close));
     global->Set(String::NewFromUtf8(isolate, "$eval"),
                 FunctionTemplate::New(isolate, EvalString));
+    global->Set(String::NewFromUtf8(isolate, "$malloc"),
+                FunctionTemplate::New(isolate, Malloc));
 
     Local<Context> context = Context::New(isolate, NULL, global);
     if (context.IsEmpty()) {
@@ -576,6 +682,10 @@ static void CreateIsolate(js_vm *vm) {
     Local<ObjectTemplate> cp_templ = ObjectTemplate::New(isolate);
     cp_templ->Set(String::NewFromUtf8(isolate, "ctype"),
                 FunctionTemplate::New(isolate, Ctype));
+    cp_templ->Set(String::NewFromUtf8(isolate, "dispose"),
+                FunctionTemplate::New(isolate, Dispose));
+    cp_templ->Set(String::NewFromUtf8(isolate, "free"),
+                FunctionTemplate::New(isolate, Free));
     vm->ctype_proto.Reset(isolate,
                 cp_templ->NewInstance(context).ToLocalChecked());
 
@@ -1139,7 +1249,7 @@ void *js_topointer(js_handle *h) {
 void js_reset(js_handle *h) {
     Isolate *isolate = h->vm->isolate;
     Locker locker(isolate);
-    if ((h->flags & (PERM_HANDLE|ARG_HANDLE)) == 0) {
+    if ((h->flags & (PERM_HANDLE|ARG_HANDLE|WEAK_HANDLE)) == 0) {
         Isolate::Scope isolate_scope(isolate); // more than one isolate in worker ???
         h->handle.Reset();
         if (h->flags & STR_HANDLE)
@@ -1151,7 +1261,12 @@ void js_reset(js_handle *h) {
 static void WeakPtrCallback(
         const v8::WeakCallbackInfo<js_handle> &data) {
     js_handle *h = data.GetParameter();
-    if (h->free_func)
+    if (h->flags & FREE_WRAP) {
+        js_handle *ah[1] = {h};
+        js_handle *hret = h->free_wrap(h->vm, 1, ah);
+        if (hret) // should be NULL
+            js_reset(hret);
+    } else if (h->free_func)
         h->free_func(h->ptr);
     h->handle.Reset();
     delete h;
@@ -1161,7 +1276,7 @@ void js_dispose(js_handle *h, Fnfree free_func) {
     Isolate *isolate = h->vm->isolate;
     Locker locker(isolate);
     if (free_func && h->type == V8EXTPTR
-            && (h->flags & (PERM_HANDLE|ARG_HANDLE)) == 0
+            && (h->flags & (PERM_HANDLE|ARG_HANDLE|WEAK_HANDLE)) == 0
     ) {
         Isolate::Scope isolate_scope(isolate);
         HandleScope handle_scope(isolate);
@@ -1174,6 +1289,7 @@ void js_dispose(js_handle *h, Fnfree free_func) {
         h->free_func = free_func;
         h->handle.SetWeak(h, WeakPtrCallback, WeakCallbackType::kParameter);
         h->handle.MarkIndependent();
+        h->flags |= WEAK_HANDLE;
     }
 }
 

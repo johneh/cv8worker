@@ -40,6 +40,8 @@ struct js_handle_s {
 #define INT32_HANDLE    (1 << 3)
 #define VALUE_MASK (DBL_HANDLE|STR_HANDLE|INT32_HANDLE)
 #define ARG_HANDLE  (1 << 4)
+#define WEAK_HANDLE (1 << 5)
+#define FREE_WRAP (1 << 6)
 
     union {
         double d;
@@ -48,7 +50,10 @@ struct js_handle_s {
         void *ptr;
     };
     js_vm *vm;
-    Fnfree free_func;
+    union {
+        Fnfree free_func;
+        struct js_handle_s *(*free_wrap)(js_vm *, int, struct js_handle_s *[]);
+    };
     v8::Persistent<v8::Value> handle;
 };
 
