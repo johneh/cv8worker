@@ -18,5 +18,5 @@ struct cffn_s {
     const char *name;
 };
 
-typedef struct cffn_s js_ffn_t;
+typedef struct cffn_s js_ffn;
 #endif

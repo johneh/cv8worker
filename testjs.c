@@ -36,7 +36,7 @@ void testcall(js_vm *vm) {
     CHECK(list_props, vm);
     assert(js_isfunction(list_props));
     js_handle *h1 = js_call(vm, list_props, NULL,
-                        (jsargs_t) { JSGLOBAL(vm) });
+                        (js_args) { JSGLOBAL(vm) });
     CHECK(h1, vm);
     js_reset(h1);
     js_reset(list_props);
@@ -66,7 +66,7 @@ void testgo(js_vm *vm) {
         return function(s, callback) {\
             $go(co, s, callback);\
         };\
-    });", NULL, (jsargs_t) { p1 } );
+    });", NULL, (js_args) { p1 } );
     assert(f1);
 
     /* Global.task1 = f1; */
@@ -99,7 +99,7 @@ void testsend(js_vm *vm) {
         return function(s, callback) {\
             $send(co, s, callback);\
         };\
-    });", NULL, (jsargs_t) { p1 } );
+    });", NULL, (js_args) { p1 } );
     assert(f1);
 
     /* Global.task1 = f1; */
@@ -142,7 +142,7 @@ js_handle *ff_strerror(js_vm *vm, int argc, js_handle *argv[]) {
     return ret;
 }
 
-static js_ffn_t ff_table[] = {
+static js_ffn ff_table[] = {
     { 1, ff_readfile, "readfile" },
     { 1, ff_strerror, "strerror" },
 };
@@ -183,7 +183,7 @@ void testarraybuffer(js_vm *vm) {
     js_handle *h3 = js_callstr(vm, "(function(ab){\n\
 var ia = new Int32Array(ab);\n\
 ia[0] = 11; ia[1] = 22; ia[2] = 33; ia[3] = 44;\n\
-$print(ia); return ia;});\n", NULL, (jsargs_t) { h2 });
+$print(ia); return ia;});\n", NULL, (js_args) { h2 });
     CHECK(h3, vm);
     assert(js_isobject(h3));
     printf("byteLength = %d\n", (int) js_bytelength(h3));

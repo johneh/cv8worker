@@ -54,12 +54,12 @@ int js_run(js_vm *vm, const char *src) {
 }
 
 //
-// js_call(vm, func, NULL, (jsargs_t){0})
+// js_call(vm, func, NULL, (js_args){0})
 // -> this === Global and 0 args
 //
 /* Returns NULL if there was an error in V8. */
 js_handle *js_call(js_vm *vm, js_handle *hfunc,
-        js_handle *hself, jsargs_t hargs) {
+        js_handle *hself, js_args hargs) {
 
     struct js8_arg_s args;
     args.type = V8CALL;
@@ -78,7 +78,7 @@ js_handle *js_call(js_vm *vm, js_handle *hfunc,
 
 // source is a function expression
 js_handle *js_callstr(js_vm *vm, const char *source,
-        js_handle *hself, jsargs_t hargs) {
+        js_handle *hself, js_args hargs) {
 
     struct js8_arg_s args;
     args.type = V8CALLSTR;

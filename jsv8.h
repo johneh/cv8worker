@@ -6,11 +6,11 @@ extern void js_vmclose(js_vm *vm);
 extern js_handle *js_eval(js_vm *vm, const char *src);
 extern int js_run(js_vm *vm, const char *src);
 
-typedef js_handle *jsargs_t[4];
+typedef js_handle *js_args[4];
 extern js_handle *js_call(js_vm *vm,
-        js_handle *hfunc, js_handle *hself, jsargs_t hargs);
+        js_handle *hfunc, js_handle *hself, js_args hargs);
 extern js_handle *js_callstr(js_vm *vm, const char *source,
-        js_handle *hself, jsargs_t hargs);
+        js_handle *hself, js_args hargs);
 
 /* if length is -1, the number of bytes is calculated using strlen(stp). */
 extern js_handle *js_string(js_vm *vm, const char *stp, int length);
@@ -37,7 +37,7 @@ extern const js_handle *js_null(js_vm *vm);
 #define JSNULL(vm)    (js_handle *)js_null(vm)
 
 extern js_handle *js_pointer(js_vm *vm, void *ptr);
-extern js_handle *js_cfunc(js_vm *vm, const js_ffn_t *func_wrap);
+extern js_handle *js_cfunc(js_vm *vm, const js_ffn *func_wrap);
 
 extern void js_reset(js_handle *h);
 extern void js_dispose(js_handle *h, Fnfree free_func);
