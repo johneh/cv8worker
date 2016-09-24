@@ -38,10 +38,11 @@ struct js_handle_s {
 #define DBL_HANDLE  (1 << 1)
 #define STR_HANDLE  (1 << 2)
 #define INT32_HANDLE    (1 << 3)
-#define VALUE_MASK (DBL_HANDLE|STR_HANDLE|INT32_HANDLE)
-#define ARG_HANDLE  (1 << 4)
-#define WEAK_HANDLE (1 << 5)
-#define FREE_WRAP (1 << 6)
+#define PTR_HANDLE  (1 << 4)
+#define VALUE_MASK (DBL_HANDLE|STR_HANDLE|INT32_HANDLE|PTR_HANDLE)
+#define ARG_HANDLE  (1 << 5)
+#define WEAK_HANDLE (1 << 6)
+#define FREE_WRAP (1 << 7)
 
     union {
         double d;

@@ -4,6 +4,8 @@ include $(TOPDIR)/config.mk
 INCLUDES = -I. -I$(MILL_INCLUDES) $(V8_INCLUDES)
 LIBS = $(V8_LIBS) $(MILL_LIBS) -lm -lstdc++
 
+#CPPFLAGS += -DV8TEST=1
+
 all: libcv8.a
 
 v8binding.o: v8binding.cc v8binding.h jsdef.h vm.h

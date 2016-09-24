@@ -243,7 +243,7 @@ int main(int argc, char *argv[]) {
     testexports(vm);
     testsend(vm);
     testarraybuffer(vm);
-    testdispose(vm);
+    /* testdispose(vm); -- requires V8TEST defined */
 
     js_vmclose(vm);
     mill_worker_delete(w);

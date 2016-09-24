@@ -557,6 +557,7 @@ static void Dispose(const FunctionCallbackInfo<Value>& args) {
 
     js_handle *h = make_handle(vm, obj, V8EXTPTR);
     h->ptr = ptr;
+    h->flags |= PTR_HANDLE;
     if (argc == 0) {
         h->free_func = free;
         h->flags |= WEAK_HANDLE;
@@ -699,7 +700,7 @@ static void CreateIsolate(js_vm *vm) {
     vm->nullptr_handle->vm = vm;
     vm->nullptr_handle->type = V8EXTPTR;
     vm->nullptr_handle->ptr = nullptr;
-    vm->nullptr_handle->flags = PERM_HANDLE;
+    vm->nullptr_handle->flags = (PERM_HANDLE|PTR_HANDLE);
     vm->nullptr_handle->handle.Reset(isolate, nullptr_obj);
 
     // Name the global object "Global".
@@ -1105,6 +1106,7 @@ js_handle *js_pointer(js_vm *vm, void *ptr) {
     obj->SetPrototype(Local<Value>::New(isolate, vm->ctype_proto));
     js_handle *h = make_handle(vm, obj, V8EXTPTR);
     h->ptr = ptr;
+    h->flags |= PTR_HANDLE;
     h->free_func = (Fnfree) nullptr;
     return h;
 }
@@ -1227,7 +1229,7 @@ void *js_topointer(js_handle *h) {
     Locker locker(isolate);
     // Clear error
     js_set_errstr(vm, nullptr);
-    if (h->type == V8EXTPTR)
+    if (h->type == V8EXTPTR && (h->flags & PTR_HANDLE))
         return h->ptr;
 
     void *ptr;
@@ -1235,7 +1237,12 @@ void *js_topointer(js_handle *h) {
     HandleScope handle_scope(isolate);
 
     Local<Value> v1 = Local<Value>::New(isolate, h->handle);
-    if (v1->IsArrayBuffer()) {
+    if (h->type == V8EXTPTR) {
+        ptr = Local<External>::Cast(
+                    Local<Object>::Cast(v1)->GetInternalField(1)
+                )->Value();
+        h->flags |= PTR_HANDLE;
+    } else if (v1->IsArrayBuffer()) {
         // The pointer will be invalid if the ArrayBuffer gets
         // garbage collected!.
         ptr = Local<ArrayBuffer>::Cast(v1)->GetContents().Data();
