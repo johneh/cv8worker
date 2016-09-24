@@ -1,5 +1,5 @@
-#ifndef _JS_COMMON_H
-#define _JS_COMMON_H
+#ifndef _JSDEF_H
+#define _JSDEF_H
 
 struct js_vm_s;
 typedef struct js_vm_s js_vm;

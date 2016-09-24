@@ -75,11 +75,18 @@ js_handle *exports(js_vm *vm) {
     return h1;
 }
 
-js_handle *parse_args(js_vm *vm, int argc, char **argv) {
+js_handle *parse_args(js_vm *vm, int argc, char **argv, char **path) {
     js_handle *hargs = js_array(vm, argc);
     js_handle *hs;
     int i;
+    *path = NULL;
     for (i = 1; i < argc; i++) {
+        if (!argv[i])
+            break;
+        if (strcmp(argv[i], "-p") == 0 && i+1 < argc) {
+            *path = argv[++i];
+            continue;
+        }
         hs = js_string(vm, argv[i], strlen(argv[i]));
         js_seti(hargs, i-1, hs);
         js_reset(hs);
@@ -88,40 +95,44 @@ js_handle *parse_args(js_vm *vm, int argc, char **argv) {
 }
 
 #ifndef MODULEPATH
-#define MODULEPATH ""
+#define MODULEPATH "."
 #endif
 
 static char fmt_src[] = "(function (loader, argv) {"
-"var file = '%s'; var s1 = loader.readFile(file);"
+"var file = '%s/%s'; var s1 = loader.readFile(file);"
 "if(s1 === null) throw new Error(file+': file not found');"
 "$eval(s1, file).call(this, loader, argv);})";
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: %s [-p <libpath>] -f <source>\n", argv[0]);
+        fprintf(stderr, "usage: %s [-p <libpath>] -f <source>\n\
+       %s <source>\n", argv[0], argv[0]);
         exit(1);
     }
 
     mill_init(-1, 0);
     mill_worker w = mill_worker_create();
+    assert(w);
     js_vm *vm = js_vmopen(w);
 
-    /* TODO: read environ for libpath here */
-    char *libpath = realpath(MODULEPATH, NULL);
+    char *libpath = NULL;
+    js_handle *hargs = parse_args(vm, argc, argv, &libpath);
     js_handle *hldr = exports(vm);
-    if (libpath) {
-        js_set_string(hldr, "path", libpath);
-        free(libpath);
-    } else
-        js_set_string(hldr, "path", ""); /* Search in CWD. */
+    if (!libpath)   /* TODO: path from an enviroment variable */
+        libpath = MODULEPATH;
+    js_set_string(hldr, "path", libpath);
 
-    js_handle *hargs = parse_args(vm, argc, argv);
+    char *mainpath = strdup(libpath);
+    assert(mainpath);
+    char *p;
+    /* Only search the first item for __main__.js */
+    if ((p = strchr(mainpath, ':')))
+        *p = '\0';
 
     assert(strlen(fmt_src) < 256);
     char s[PATH_MAX+256];
-    // FIXME path of __main__.js ???
-    snprintf(s, PATH_MAX+256, fmt_src, "__main__.js");
-    /* fprintf(stderr, "%s\n", s); */
+    snprintf(s, PATH_MAX+256, fmt_src, mainpath, "__main__.js");
+    free(mainpath);
 
     js_handle *hret = js_callstr(vm, s, JSGLOBAL(vm),
             (js_args) { hldr, hargs });

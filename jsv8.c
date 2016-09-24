@@ -15,13 +15,14 @@
 #include "jsv8.h"
 #include "util.h"
 
-#define js8_worker(vm)  *((mill_worker *) (vm))
+#define WORKER(vm)  *((mill_worker *) (vm))
 
-js_vm *js_vmopen(mill_worker w) {
+js_vm *js_vmopen(js_worker jw) {
+    mill_worker w = (mill_worker) jw;
     if (!w)
         mill_panic("js_vmopen: mill_worker expected");
     js_vm *vm = js8_vmnew(w);   /* This runs in the main thread. */
-    assert(*((mill_worker *) vm) == js8_worker(vm));
+    assert(*((mill_worker *) vm) == WORKER(vm));
     /* Run js8_vminit() in the V8 thread. */
     int rc = task_run(w, (void *) js8_vminit, vm, -1);
     assert(rc == 0);
@@ -29,20 +30,25 @@ js_vm *js_vmopen(mill_worker w) {
 }
 
 void js_vmclose(js_vm *vm) {
-    /* Close the write end of the pipe from the V8 thread and
-     * wait for the start_coro (See v8binding.c) coroutine to exit. */
+    /* Close the write end of the pipe from the V8 thread. */
     (void) js_run(vm, "$close();");
-    mill_waitall(-1);
     js8_vmclose(vm);
 }
 
+static int js_sched(struct js8_arg_s *args) {
+    if (mill_isself(WORKER(args->vm)))
+        return js8_do(args);
+    return task_run(WORKER(args->vm), (void *) js8_do, args, -1);
+}
+
+/* Returns NULL if there was an error in V8. */
 js_handle *js_eval(js_vm *vm, const char *src) {
     struct js8_arg_s args;
     args.type = V8COMPILERUN;
     args.vm = vm;
     args.source = (char *) src;
-    (void) task_run(js8_worker(vm), (void *) js8_do, &args, -1);
-    return args.h;  /* NULL if error */
+    js_sched(&args);
+    return args.h;
 }
 
 int js_run(js_vm *vm, const char *src) {
@@ -60,7 +66,6 @@ int js_run(js_vm *vm, const char *src) {
 /* Returns NULL if there was an error in V8. */
 js_handle *js_call(js_vm *vm, js_handle *hfunc,
         js_handle *hself, js_args hargs) {
-
     struct js8_arg_s args;
     args.type = V8CALL;
     args.vm = vm;
@@ -72,14 +77,14 @@ js_handle *js_call(js_vm *vm, js_handle *hfunc,
     }
     args.nargs = nargs;
     args.h = hself;
-    (void) task_run(js8_worker(vm), (void *) js8_do, &args, -1);
+    js_sched(&args);
     return args.h;
 }
 
-// source is a function expression
+/* SOURCE is a function expression.
+ Returns NULL if there was an error in V8. */
 js_handle *js_callstr(js_vm *vm, const char *source,
         js_handle *hself, js_args hargs) {
-
     struct js8_arg_s args;
     args.type = V8CALLSTR;
     assert(source);
@@ -92,16 +97,15 @@ js_handle *js_callstr(js_vm *vm, const char *source,
     }
     args.nargs = nargs;
     args.h = hself;
-    (void) task_run(js8_worker(vm), (void *) js8_do, &args, -1);
-    return args.h; /* NULL if there was an error in V8. */
+    js_sched(&args);
+    return args.h;
 }
 
 void js_gc(js_vm *vm) {
     struct js8_arg_s args;
     args.type = V8GC;
     args.vm = vm;
-    int rc = task_run(js8_worker(vm), (void *) js8_do, &args, -1);
-    assert(rc);
+    js_sched(&args);
 }
 
 js_coro *choose_coro(chan ch, int64_t ddline) {

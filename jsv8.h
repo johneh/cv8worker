@@ -1,6 +1,12 @@
+#ifndef _JSV8_H
+#define _JSV8_H
+#include <stdint.h>
+#include <stddef.h>
 #include "jsdef.h"
 
-extern js_vm *js_vmopen(mill_worker w);
+typedef void *js_worker;
+
+extern js_vm *js_vmopen(js_worker w);
 extern void js_vmclose(js_vm *vm);
 
 extern js_handle *js_eval(js_vm *vm, const char *src);
@@ -62,3 +68,10 @@ extern js_handle *js_error(js_vm *vm, const char *message);
 extern const char *js_errstr(js_vm *vm);
 
 extern void js_gc(js_vm *vm);
+
+#define JSLOAD(vm, libobj_handle) js_load(vm, libobj_handle, js_ffn **fp_)
+#define JSEXPORT(t_) do {\
+*fp_ = t_; return sizeof(t_)/sizeof(t_[0]);\
+} while(0)
+
+#endif

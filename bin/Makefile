@@ -12,7 +12,7 @@ jsi.o: $(TOPDIR)/jsv8.h $(TOPDIR)/jsdef.h jsi.c
 	$(CC) $(CFLAGS) $(INCLUDES) -c jsi.c
 
 jsi: jsi.o $(TOPDIR)/libcv8.a
-	$(CC) -o $@ $^ $(LIBS)
+	$(CC) -o $@ $^ -rdynamic $(LIBS)
 
 clean:
 	rm -f *.o

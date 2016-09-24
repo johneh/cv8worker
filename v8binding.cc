@@ -4,6 +4,8 @@
 #include <string.h>
 #include <string>
 #include <errno.h>
+#include <dlfcn.h>
+
 #include "v8.h"
 #include "libplatform/libplatform.h"
 
@@ -69,6 +71,8 @@ fprintf(stderr, format , ## args);
 #else
 #define DPRINT(format, args...) /* nothing */
 #endif
+
+typedef int (*Fnload)(js_vm *, js_handle *, js_ffn **);
 
 extern js_coro *choose_coro(chan ch, int64_t ddline);
 static js_handle *init_handle(js_vm *vm,
@@ -363,6 +367,74 @@ static void Malloc(const v8::FunctionCallbackInfo<v8::Value>& args) {
     args.GetReturnValue().Set(obj);
 }
 
+
+#define NEW_EXTFUNC(func_wrap, ptrObj) { \
+    Local<ObjectTemplate> templ = \
+        Local<ObjectTemplate>::New(isolate, vm->extfunc_template); \
+    ptrObj = templ->NewInstance(context).ToLocalChecked(); \
+    ptrObj->SetAlignedPointerInInternalField(0, \
+             reinterpret_cast<void*>(static_cast<uintptr_t>(V8EXTFUNC<<2))); \
+    ptrObj->SetInternalField(1, External::New(isolate, (void *)func_wrap)); \
+    ptrObj->SetPrototype(Local<Value>::New(isolate, vm->ctype_proto)); }
+
+// $load - load a dynamic library.
+// The filename must contain a slash. Any path search should be
+// done in the JS.
+
+// The library must export this routine:
+#define LOAD_FUNC "js_load"
+
+static void Load(const FunctionCallbackInfo<Value>& args) {
+    Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
+    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
+
+    int argc = args.Length();
+    ThrowNotEnoughArgs(isolate, argc < 1);
+    Local<Context> context = isolate->GetCurrentContext();
+    String::Utf8Value path(args[0]);
+    if (!*path) {
+        ThrowError(isolate, "$load: path is empty string");
+    }
+    if (!strchr(*path, '/')) {
+        args.GetReturnValue().Set(v8::Null(isolate));
+        return;
+    }
+    dlerror();  /* Clear any existing error */
+    void *dl = dlopen(*path, RTLD_LAZY);
+    if (! dl) {
+        ThrowError(isolate, "$load: cannot dlopen library"); /* FIXME: use  dlerror() */
+    }
+
+    Fnload load_func = (Fnload) dlsym(dl, LOAD_FUNC);
+    if (! load_func) {
+        dlclose(dl);
+        ThrowError(isolate, "$load: cannot find library initialization function");
+    }
+
+    js_ffn *functab;
+    js_handle *h1 = js_object(vm);
+    Local<Object> o1 = Local<Object>::Cast(
+            Local<Value>::New(isolate, h1->handle));
+    js_set_errstr(vm, nullptr);
+    int nfunc = load_func(vm, h1, & functab);
+    js_reset(h1);
+    if (nfunc < 0) {
+        dlclose(dl);
+        ThrowError(isolate, vm->errstr ? vm->errstr : "unknown error");
+    }
+    for (int i = 0; i < nfunc; i++) {
+        if (!functab[i].name)
+            break;
+        Local<Object> ptrObj = Local<Object>();
+        NEW_EXTFUNC(&functab[i], ptrObj)
+        o1->Set(context,
+                String::NewFromUtf8(isolate, functab[i].name),
+                ptrObj).FromJust();
+    }
+    args.GetReturnValue().Set(o1);
+}
+
 static void CallForeignFunc(
         const v8::FunctionCallbackInfo<v8::Value>& args) {
 
@@ -567,6 +639,8 @@ static void CreateIsolate(js_vm *vm) {
                 FunctionTemplate::New(isolate, EvalString));
     global->Set(String::NewFromUtf8(isolate, "$malloc"),
                 FunctionTemplate::New(isolate, Malloc));
+    global->Set(String::NewFromUtf8(isolate, "$load"),
+                FunctionTemplate::New(isolate, Load));
 
     Local<Context> context = Context::New(isolate, NULL, global);
     if (context.IsEmpty()) {
@@ -1041,16 +1115,9 @@ js_handle *js_cfunc(js_vm *vm, const struct cffn_s *func_wrap) {
     LOCK_SCOPE(isolate);
     Local<Context> context = Local<Context>::New(isolate, vm->context);
     Context::Scope context_scope(context);
-
-    Local<ObjectTemplate> templ =
-        Local<ObjectTemplate>::New(isolate, vm->extfunc_template);
-    Local<Object> obj = templ->NewInstance(context).ToLocalChecked();
-    assert(obj->InternalFieldCount() == 2);
-    obj->SetAlignedPointerInInternalField(0,
-             reinterpret_cast<void*>(static_cast<uintptr_t>(V8EXTFUNC<<2)));
-    obj->SetInternalField(1, External::New(isolate, (void *)func_wrap));
-    obj->SetPrototype(Local<Value>::New(isolate, vm->ctype_proto));
-    return make_handle(vm, obj, V8EXTFUNC);
+    Local<Object> ptrObj = Local<Object>();
+    NEW_EXTFUNC(func_wrap, ptrObj)
+    return make_handle(vm, ptrObj, V8EXTFUNC);
 }
 
 // Send from C coroutine to V8
