@@ -27,6 +27,7 @@ struct js_vm_s {
     v8::Persistent<v8::ObjectTemplate> extfunc_template;
 
     v8::Persistent<v8::Value> ctype_proto;
+    v8::Persistent<v8::Value> cptr_proto;
 
     js_handle *args[MAXARGS];
 };

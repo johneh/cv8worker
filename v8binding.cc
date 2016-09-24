@@ -76,6 +76,7 @@ static js_handle *init_handle(js_vm *vm,
 static inline js_handle *make_handle(js_vm *vm,
             Local<Value> value, enum js_code type);
 static void *ExternalPtrValue(js_vm *vm, Local <Value> v);
+static void MakeCtypeProto(js_vm *vm);
 static void WeakPtrCallback(
         const v8::WeakCallbackInfo<js_handle> &data);
 
@@ -339,7 +340,7 @@ static Local<Object> WrapPtr(js_vm *vm, void *ptr) {
     obj->SetAlignedPointerInInternalField(0,
              reinterpret_cast<void*>(static_cast<uintptr_t>(oid)));
     obj->SetInternalField(1, External::New(isolate, ptr));
-    obj->SetPrototype(Local<Value>::New(isolate, vm->ctype_proto));
+    obj->SetPrototype(Local<Value>::New(isolate, vm->cptr_proto));
     return handle_scope.Escape(obj);
 }
 
@@ -525,87 +526,6 @@ coroutine static void recv_coro(js_vm *vm) {
     }
 }
 
-// C pointer and function objects method
-static void Ctype(const FunctionCallbackInfo<Value>& args) {
-    Isolate *isolate = args.GetIsolate();
-    HandleScope handle_scope(isolate);
-    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
-    Local<Object> obj = args.This();
-    assert(args.Holder() == args.This());  // unlike in accessor callback, true here!
-    int id = GetCtypeId(vm, obj);
-    if (id == V8EXTPTR)
-        args.GetReturnValue().Set(String::NewFromUtf8(isolate, "C-pointer"));
-    else if (id == V8EXTFUNC)
-        args.GetReturnValue().Set(String::NewFromUtf8(isolate, "C-function"));
-}
-
-/*
- *  ptr.dispose() => use free() as the finalizer.
- *  ptr.dispose(finalizer_function).
- */
-static void Dispose(const FunctionCallbackInfo<Value>& args) {
-    int argc = args.Length();
-    Isolate *isolate = args.GetIsolate();
-    HandleScope handle_scope(isolate);
-    Local <Object> obj = args.Holder();
-    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
-    if (GetCtypeId(vm, obj) != V8EXTPTR)
-        ThrowTypeError(isolate, "dispose: not a C-pointer");
-    void *ptr = Local<External>::Cast(obj->GetInternalField(1))->Value();
-    if (!ptr || IsCtypeWeak(obj))
-        return;
-
-    js_handle *h = make_handle(vm, obj, V8EXTPTR);
-    h->ptr = ptr;
-    h->flags |= PTR_HANDLE;
-    if (argc == 0) {
-        h->free_func = free;
-        h->flags |= WEAK_HANDLE;
-    } else if (GetCtypeId(vm, args[0]) == V8EXTFUNC) {
-        js_ffn *func_wrap = static_cast<js_ffn *>(
-                Local<External>::Cast(
-                        Local<Object>::Cast(args[0])->GetInternalField(1)
-                    )->Value()
-            );
-        if (func_wrap->pcount == 1) {
-            h->free_wrap = func_wrap->fp;
-            h->flags |= (FREE_WRAP|WEAK_HANDLE);
-        }
-    }
-    if (!(h->flags & WEAK_HANDLE)) {
-        h->handle.Reset();
-        delete h;
-        ThrowError(isolate, "dispose: invalid argument");
-    }
-    int oid = (V8EXTPTR<<2)|(1<<1);
-    obj->SetAlignedPointerInInternalField(0,
-                reinterpret_cast<void*>(static_cast<uintptr_t>(oid)));
-    h->handle.SetWeak(h, WeakPtrCallback, WeakCallbackType::kParameter);
-    h->handle.MarkIndependent();
-}
-
-static void Free(const FunctionCallbackInfo<Value>& args) {
-    int argc = args.Length();
-    Isolate *isolate = args.GetIsolate();
-    HandleScope handle_scope(isolate);
-    Local <Object> obj = args.Holder();
-    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
-    if (GetCtypeId(vm, obj) != V8EXTPTR)
-        ThrowTypeError(isolate, "free: not a C-pointer");
-    void *ptr = Local<External>::Cast(obj->GetInternalField(1))->Value();
-    if (!ptr || IsCtypeWeak(obj))
-        return;
-    if (argc == 0) {
-        free(ptr);
-        ptr = nullptr;
-    } /* else if (GetCtypeId(vm, args[0]) == V8EXTFUNC) {
-
-    } */
-
-    if (!ptr)
-        obj->SetInternalField(1, External::New(isolate, nullptr));
-}
-
 // The second part of the vm initialization.
 static void CreateIsolate(js_vm *vm) {
     v8init();
@@ -679,23 +599,15 @@ static void CreateIsolate(js_vm *vm) {
     vm->null_handle->flags = PERM_HANDLE;
     vm->null_handle->handle.Reset(vm->isolate, v8::Null(isolate));
 
-    // Construct the prototype object for C pointers and functions.
-    Local<ObjectTemplate> cp_templ = ObjectTemplate::New(isolate);
-    cp_templ->Set(String::NewFromUtf8(isolate, "ctype"),
-                FunctionTemplate::New(isolate, Ctype));
-    cp_templ->Set(String::NewFromUtf8(isolate, "dispose"),
-                FunctionTemplate::New(isolate, Dispose));
-    cp_templ->Set(String::NewFromUtf8(isolate, "free"),
-                FunctionTemplate::New(isolate, Free));
-    vm->ctype_proto.Reset(isolate,
-                cp_templ->NewInstance(context).ToLocalChecked());
+    // Create __proto__ for C-type objects.
+    MakeCtypeProto(vm);
 
     Local<Object> nullptr_obj = extptr_templ->NewInstance(
                                             context).ToLocalChecked();
     nullptr_obj->SetAlignedPointerInInternalField(0,
             reinterpret_cast<void*>(static_cast<uintptr_t>(V8EXTPTR<<2)));
     nullptr_obj->SetInternalField(1, External::New(isolate, nullptr));
-    nullptr_obj->SetPrototype(Local<Value>::New(isolate, vm->ctype_proto));
+    nullptr_obj->SetPrototype(Local<Value>::New(isolate, vm->cptr_proto));
     vm->nullptr_handle = new js_handle_s;
     vm->nullptr_handle->vm = vm;
     vm->nullptr_handle->type = V8EXTPTR;
@@ -1378,5 +1290,107 @@ int js8_do(struct js8_arg_s *args) {
     return 1;
 }
 
+///////////////////////// C-type proto /////////////////////////
+
+// C pointer and function objects method
+static void Ctype(const FunctionCallbackInfo<Value>& args) {
+    Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
+    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
+    Local<Object> obj = args.This();
+    assert(args.Holder() == args.This()); // unlike in accessor callback, true here!
+    int id = GetCtypeId(vm, obj);
+    if (id == V8EXTPTR)
+        args.GetReturnValue().Set(String::NewFromUtf8(isolate, "C-pointer"));
+    else if (id == V8EXTFUNC)
+        args.GetReturnValue().Set(String::NewFromUtf8(isolate, "C-function"));
+}
+
+/*
+ *  ptr.dispose() => use free() as the finalizer.
+ *  ptr.dispose(finalizer_function).
+ */
+static void Dispose(const FunctionCallbackInfo<Value>& args) {
+    int argc = args.Length();
+    Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
+    Local <Object> obj = args.Holder();
+    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
+    if (GetCtypeId(vm, obj) != V8EXTPTR)
+        ThrowTypeError(isolate, "dispose: not a C-pointer");
+    void *ptr = Local<External>::Cast(obj->GetInternalField(1))->Value();
+    if (!ptr || IsCtypeWeak(obj))
+        return;
+
+    js_handle *h = make_handle(vm, obj, V8EXTPTR);
+    h->ptr = ptr;
+    h->flags |= PTR_HANDLE;
+    if (argc == 0) {
+        h->free_func = free;
+        h->flags |= WEAK_HANDLE;
+    } else if (GetCtypeId(vm, args[0]) == V8EXTFUNC) {
+        js_ffn *func_wrap = static_cast<js_ffn *>(
+                Local<External>::Cast(
+                        Local<Object>::Cast(args[0])->GetInternalField(1)
+                    )->Value()
+            );
+        if (func_wrap->pcount == 1) {
+            h->free_wrap = func_wrap->fp;
+            h->flags |= (FREE_WRAP|WEAK_HANDLE);
+        }
+    }
+    if (!(h->flags & WEAK_HANDLE)) {
+        h->handle.Reset();
+        delete h;
+        ThrowError(isolate, "dispose: invalid argument");
+    }
+    int oid = (V8EXTPTR<<2)|(1<<1);
+    obj->SetAlignedPointerInInternalField(0,
+                reinterpret_cast<void*>(static_cast<uintptr_t>(oid)));
+    h->handle.SetWeak(h, WeakPtrCallback, WeakCallbackType::kParameter);
+    h->handle.MarkIndependent();
+}
+
+static void Free(const FunctionCallbackInfo<Value>& args) {
+    Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
+    Local <Object> obj = args.Holder();
+    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
+    if (GetCtypeId(vm, obj) != V8EXTPTR)
+        ThrowTypeError(isolate, "free: not a C-pointer");
+    void *ptr = Local<External>::Cast(obj->GetInternalField(1))->Value();
+    if (ptr && !IsCtypeWeak(obj)) {
+        free(ptr);
+        obj->SetInternalField(1, External::New(isolate, nullptr));
+    }
+}
+
+// Construct the prototype object for C pointers and functions.
+static void MakeCtypeProto(js_vm *vm) {
+    Isolate *isolate = vm->isolate;
+    HandleScope handle_scope(isolate);
+    Local<ObjectTemplate> cp_templ = ObjectTemplate::New(isolate);
+    cp_templ->Set(String::NewFromUtf8(isolate, "ctype"),
+                FunctionTemplate::New(isolate, Ctype));
+    vm->ctype_proto.Reset(isolate, cp_templ->NewInstance(
+                    isolate->GetCurrentContext()).ToLocalChecked());
+
+    // Create the proto object for the C-type pointer.
+    //  cptr_object.__proto__ = ptr_proto;
+    //  ptr_proto.__proto__ = vm->ctype_proto;
+    Local<ObjectTemplate> ptr_templ = ObjectTemplate::New(isolate);
+    ptr_templ->Set(String::NewFromUtf8(isolate, "dispose"),
+                FunctionTemplate::New(isolate, Dispose));
+    ptr_templ->Set(String::NewFromUtf8(isolate, "free"),
+                FunctionTemplate::New(isolate, Free));
+
+    // Create the one and only proto instance.
+    Local<Object> ptr_proto = ptr_templ
+                -> NewInstance(isolate->GetCurrentContext()).ToLocalChecked();
+    // Setup the proto chain.
+    ptr_proto->SetPrototype(Local<Value>::New(isolate, vm->ctype_proto));
+    // Make the proto object persistent.
+    vm->cptr_proto.Reset(isolate, ptr_proto);
+}
 
 }
