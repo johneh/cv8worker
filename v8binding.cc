@@ -345,6 +345,7 @@ static Local<Object> WrapPtr(js_vm *vm, void *ptr) {
 }
 
 // malloc(size [, zerofill])
+// TODO: adjust GC allocation amount.
 static void Malloc(const v8::FunctionCallbackInfo<v8::Value>& args) {
     int argc = args.Length();
     Isolate *isolate = args.GetIsolate();
@@ -710,6 +711,8 @@ static js_handle *make_handle(js_vm *vm,
     if (value->IsUndefined())
         return vm->undef_handle;
     h = new js_handle_s;
+    vm->isolate->AdjustAmountOfExternalAllocatedMemory(
+                static_cast<int64_t>(sizeof(js_handle)));
     h->flags = 0;
     h->vm = vm;
     if (type) {
@@ -1174,12 +1177,15 @@ void js_reset(js_handle *h) {
         if (h->flags & STR_HANDLE)
             free(h->stp);
         delete h;
+        isolate->AdjustAmountOfExternalAllocatedMemory(
+                - static_cast<int64_t>(sizeof(js_handle)));
     }
 }
 
 static void WeakPtrCallback(
         const v8::WeakCallbackInfo<js_handle> &data) {
     js_handle *h = data.GetParameter();
+    Isolate *isolate = h->vm->isolate;
     if (h->flags & FREE_WRAP) {
         js_handle *ah[1] = {h};
         js_handle *hret = h->free_wrap(h->vm, 1, ah);
@@ -1189,6 +1195,8 @@ static void WeakPtrCallback(
         h->free_func(h->ptr);
     h->handle.Reset();
     delete h;
+    isolate->AdjustAmountOfExternalAllocatedMemory(
+                - static_cast<int64_t>(sizeof(js_handle)));
 }
 
 void js_dispose(js_handle *h, Fnfree free_func) {
@@ -1340,8 +1348,7 @@ static void Dispose(const FunctionCallbackInfo<Value>& args) {
         }
     }
     if (!(h->flags & WEAK_HANDLE)) {
-        h->handle.Reset();
-        delete h;
+        js_reset(h);
         ThrowError(isolate, "dispose: invalid argument");
     }
     int oid = (V8EXTPTR<<2)|(1<<1);
@@ -1349,6 +1356,7 @@ static void Dispose(const FunctionCallbackInfo<Value>& args) {
                 reinterpret_cast<void*>(static_cast<uintptr_t>(oid)));
     h->handle.SetWeak(h, WeakPtrCallback, WeakCallbackType::kParameter);
     h->handle.MarkIndependent();
+
 }
 
 static void Free(const FunctionCallbackInfo<Value>& args) {
@@ -1364,6 +1372,23 @@ static void Free(const FunctionCallbackInfo<Value>& args) {
         obj->SetInternalField(1, External::New(isolate, nullptr));
     }
 }
+
+// ptr.notNull() -- ensure pointer is not NULL.
+static void NotNull(const FunctionCallbackInfo<Value>& args) {
+    Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
+    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
+    Local<Object> obj = args.Holder();
+    if (GetCtypeId(vm, obj) != V8EXTPTR)
+        ThrowTypeError(isolate, "notNull: not a C-pointer");
+    void *ptr = Local<External>::Cast(obj->GetInternalField(1))->Value();
+    if (!ptr)
+        ThrowError(isolate, "C-pointer is null");
+    // return the pointer to facilitate chaining:
+    //  ptr = foo().notNull();
+    args.GetReturnValue().Set(obj);
+}
+
 
 // Construct the prototype object for C pointers and functions.
 static void MakeCtypeProto(js_vm *vm) {
@@ -1383,6 +1408,8 @@ static void MakeCtypeProto(js_vm *vm) {
                 FunctionTemplate::New(isolate, Dispose));
     ptr_templ->Set(String::NewFromUtf8(isolate, "free"),
                 FunctionTemplate::New(isolate, Free));
+    ptr_templ->Set(String::NewFromUtf8(isolate, "notNull"),
+                FunctionTemplate::New(isolate, NotNull));
 
     // Create the one and only proto instance.
     Local<Object> ptr_proto = ptr_templ
