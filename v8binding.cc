@@ -391,7 +391,7 @@ static void CallForeignFunc(
     js_handle *hret = ((Fnfnwrap) func_wrap->fp)(vm, argc, vm->args);
     Local<Value> retv = Local<Value>();
     if (!hret) {
-        retv = v8::Null(isolate);
+        retv = v8::Undefined(isolate);
     } else {
         assert(!(hret->flags & ARG_HANDLE)); // XXX: should bail out.
         retv = Local<Value>::New(isolate, hret->handle);
@@ -1220,7 +1220,7 @@ static void Dispose(const FunctionCallbackInfo<Value>& args) {
     Local <Object> obj = args.Holder();
     js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
     if (GetCtypeId(vm, obj) != V8EXTPTR)
-        ThrowTypeError(isolate, "dispose: not a C-pointer");
+        ThrowTypeError(isolate, "dispose: not a pointer");
     void *ptr = Local<External>::Cast(obj->GetInternalField(1))->Value();
     if (!ptr || IsCtypeWeak(obj))
         return;
@@ -1259,7 +1259,7 @@ static void Free(const FunctionCallbackInfo<Value>& args) {
     Local <Object> obj = args.Holder();
     js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
     if (GetCtypeId(vm, obj) != V8EXTPTR)
-        ThrowTypeError(isolate, "free: not a C-pointer");
+        ThrowTypeError(isolate, "free: not a pointer");
     void *ptr = Local<External>::Cast(obj->GetInternalField(1))->Value();
     if (ptr && !IsCtypeWeak(obj)) {
         free(ptr);
@@ -1274,15 +1274,35 @@ static void NotNull(const FunctionCallbackInfo<Value>& args) {
     js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
     Local<Object> obj = args.Holder();
     if (GetCtypeId(vm, obj) != V8EXTPTR)
-        ThrowTypeError(isolate, "notNull: not a C-pointer");
+        ThrowTypeError(isolate, "notNull: not a pointer");
     void *ptr = Local<External>::Cast(obj->GetInternalField(1))->Value();
     if (!ptr)
-        ThrowError(isolate, "C-pointer is null");
+        ThrowError(isolate, "notNull: pointer is null");
     // return the pointer to facilitate chaining:
     //  ptr = foo().notNull();
     args.GetReturnValue().Set(obj);
 }
 
+// ptr.utf8String(length = -1)
+static void Utf8String(const FunctionCallbackInfo<Value>& args) {
+    Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
+    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
+    Local<Object> obj = args.Holder();
+    if (GetCtypeId(vm, obj) != V8EXTPTR)
+        ThrowTypeError(isolate, "utf8String: not a pointer");
+    void *ptr = Local<External>::Cast(obj->GetInternalField(1))->Value();
+    if (!ptr)
+        ThrowError(isolate, "utf8String: pointer is null");
+    int length = -1;
+    if (args.Length() > 0) {
+        length = args[0]->Int32Value(isolate->GetCurrentContext()).FromJust();
+        if (length < 0)
+            length = -1;
+    }
+    args.GetReturnValue().Set(String::NewFromUtf8(isolate,
+                (char *) ptr, v8::String::kNormalString, length));
+}
 
 // Construct the prototype object for C pointers and functions.
 static void MakeCtypeProto(js_vm *vm) {
@@ -1304,6 +1324,8 @@ static void MakeCtypeProto(js_vm *vm) {
                 FunctionTemplate::New(isolate, Free));
     ptr_templ->Set(String::NewFromUtf8(isolate, "notNull"),
                 FunctionTemplate::New(isolate, NotNull));
+    ptr_templ->Set(String::NewFromUtf8(isolate, "utf8String"),
+                FunctionTemplate::New(isolate, Utf8String));
 
     // Create the one and only proto instance.
     Local<Object> ptr_proto = ptr_templ
@@ -1332,12 +1354,16 @@ static int to_int(js_vm *vm, int arg_num, js_val argv) {
     return v->Int32Value(CURR_CONTEXT(vm)).FromJust();
 }
 
+static unsigned int to_uint(js_vm *vm, int arg_num, js_val argv) {
+    CHECK_NUMBER(vm, v)
+    return v->Uint32Value(CURR_CONTEXT(vm)).FromJust();
+}
+
 static double to_double(js_vm *vm, int arg_num, js_val argv) {
     CHECK_NUMBER(vm, v)
     return v->NumberValue(CURR_CONTEXT(vm)).FromJust();
 }
 
-// FIXME -- accept void * pointer (V8EXTPTR)
 static char *to_string(js_vm *vm, int arg_num, js_val argv) {
     Local<Value> v = ARGV;
     if (!v->IsString() /*&& !v->IsStringObject()*/) {
@@ -1370,17 +1396,12 @@ static void from_int(js_vm *vm, int i, js_val argv) {
     RETVAL = Integer::New(ISOLATE(vm), i);
 }
 
-static void from_double(js_vm *vm, double d, js_val argv) {
-    RETVAL = Number::New(ISOLATE(vm), d);
+static void from_uint(js_vm *vm, unsigned ui, js_val argv) {
+    RETVAL = Integer::NewFromUnsigned(ISOLATE(vm), ui);
 }
 
-// FIXME -- this is a bad idea, use from_pointer and priovide ptr.tostr([length]).
-static void from_string(js_vm *vm, char *ptr, js_val argv) {
-    if (!ptr)
-        RETVAL = Local<Value>::New(ISOLATE(vm),
-                    vm->nullptr_handle->handle);
-    else
-        RETVAL = String::NewFromUtf8(ISOLATE(vm), ptr);
+static void from_double(js_vm *vm, double d, js_val argv) {
+    RETVAL = Number::New(ISOLATE(vm), d);
 }
 
 static void from_pointer(js_vm *vm, void *ptr, js_val argv) {
@@ -1451,12 +1472,13 @@ static void CallDlFunc(
 
 static struct js_dlfn_s dlfns = {
     to_int,
+    to_uint,
     to_double,
     to_string,
     to_pointer,
     from_int,
+    from_uint,
     from_double,
-    from_string,
     from_pointer,
     call_str,
     js_errstr
