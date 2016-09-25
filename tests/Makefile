@@ -23,6 +23,19 @@ math.o: $(TOPDIR)/jsv8.h math.c
 libmath.so: math.o
 	$(CC) $(SO_LDFLAGS) math.o -o $@
 
+CAIRO_DIR := /usr/include/cairo
+cairojs.c: $(TOPDIR)/tools/gencode.cc
+	cd $(TOPDIR)/tools; make; cd $(TOPDIR)/tests; \
+	$(TOPDIR)/tools/gencode --strip cairo_ $(CAIRO_DIR)/cairo.h -- > $@
+
+cairojs.o: $(TOPDIR)/jsv8.h $(TOPDIR)/jsv8dlfn.h cairojs.c
+	$(CC) $(SO_CFLAGS) -I$(CAIRO_DIR) cairojs.c
+
+libcairojs.so: cairojs.o
+	$(CC) $(SO_LDFLAGS) $^ -o $@ -lcairo
+
 clean:
 	rm -f *.o
+	rm -f *.so
+	rm -f *.png
 	rm -f $(BINS)

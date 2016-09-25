@@ -188,7 +188,6 @@ public:
             const std::string &fileName = m_sm.getFilename(fullLoc);
             cout << "enum " << fileName <<":"<<fullLoc.getSpellingLineNumber()<<"\n";
 #endif
-
             CEnum *ce = FindEnumByName(enumDecl->getNameAsString());
             if (!ce) {
                 ce = new CEnum();
@@ -426,13 +425,20 @@ public:
                 if (eName.find(stripPrefix) == 0)
                     name = name + stripPrefix.size();
             }
-
+#if 0
+            // enum type as object with enumerators as properties
             fprintf(stdout, "this.%s = {\\\n", name);
             for (unsigned i = 0; i < ce->items.size(); i++) {
                 fprintf(stdout, "%s : %d,\\\n",
                     ce->items[i]->name.c_str(), ce->items[i]->value);
             }
+
             fprintf(stdout, "};\\\n");
+#endif
+            for (unsigned i = 0; i < ce->items.size(); i++) {
+                fprintf(stdout, "this.%s = %d;\\\n",
+                    ce->items[i]->name.c_str(), ce->items[i]->value);
+            }
         }
         fprintf(stdout, "});\";\n\n");
 
