@@ -385,33 +385,52 @@ static void CallForeignFunc(
     int argc = args.Length();
     if (argc > MAXARGS || argc != func_wrap->pcount)
         ThrowError(isolate, "C-function called with incorrect # of arguments");
-    for (int i = 0; i < argc; i++)
-        (void) init_handle(vm, vm->args[i], args[i]);
-    int err = 0;
-    js_handle *hret = ((Fnfnwrap) func_wrap->fp)(vm, argc, vm->args);
-    Local<Value> retv = Local<Value>();
-    if (!hret) {
-        retv = v8::Undefined(isolate);
-    } else {
-        assert(!(hret->flags & ARG_HANDLE)); // XXX: should bail out.
-        retv = Local<Value>::New(isolate, hret->handle);
-        if (hret->type == V8ERROR)  // From js_error().
-            err = 1;
-        js_reset(hret);
-    }
-    for (int i = 0; i < argc; i++) {
-        js_handle *h = vm->args[i];
-        assert(! (h->flags & PERM_HANDLE));
-        h->handle.Reset();
-        if (h->flags & STR_HANDLE)
-            free(h->stp);
-        h->flags = ARG_HANDLE;
-    }
 
-    if (err)
-        isolate->ThrowException(retv);
-    else
-        args.GetReturnValue().Set(retv);
+    if (func_wrap->isdlfunc) {
+        assert(vm->dlstr_idx == 0);
+        Local<Value> argv[MAXARGS+1];
+        // N.B.: argv[0] is for the return value
+        for (int i = 0; i < argc; i++)
+            argv[i + 1] = args[i];
+        argv[0] = v8::Undefined(isolate);   // default return type is void
+
+        js_set_errstr(vm, nullptr);
+        ((Fndlfnwrap) func_wrap->fp)(vm, argc, reinterpret_cast<js_val>(argv));
+
+        while (vm->dlstr_idx > 0) {
+            free(vm->dlstr[--vm->dlstr_idx]);
+        }
+        if (vm->errstr)
+            ThrowError(isolate, vm->errstr);
+        args.GetReturnValue().Set(argv[0]);
+    } else {
+        for (int i = 0; i < argc; i++)
+            (void) init_handle(vm, vm->args[i], args[i]);
+        int err = 0;
+        js_handle *hret = ((Fnfnwrap) func_wrap->fp)(vm, argc, vm->args);
+        Local<Value> retv = Local<Value>();
+        if (!hret) {
+            retv = v8::Undefined(isolate);
+        } else {
+            assert(!(hret->flags & ARG_HANDLE)); // XXX: should bail out.
+            retv = Local<Value>::New(isolate, hret->handle);
+            if (hret->type == V8ERROR)  // From js_error().
+                err = 1;
+            js_reset(hret);
+        }
+        for (int i = 0; i < argc; i++) {
+            js_handle *h = vm->args[i];
+            assert(! (h->flags & PERM_HANDLE));
+            h->handle.Reset();
+            if (h->flags & STR_HANDLE)
+                free(h->stp);
+            h->flags = ARG_HANDLE;
+        }
+        if (err)
+            isolate->ThrowException(retv);
+        else
+            args.GetReturnValue().Set(retv);
+    }
 }
 
 static void WaitFor(js_vm *vm) {
@@ -1436,40 +1455,6 @@ static int call_str(js_vm *vm, const char *source, js_val argv) {
     return false;   // Error
 }
 
-static void CallDlFunc(
-        const v8::FunctionCallbackInfo<v8::Value>& args) {
-    Isolate *isolate = args.GetIsolate();
-    HandleScope handle_scope(isolate);
-    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
-    Local<Object> obj = args.Holder();
-
-    assert(obj->InternalFieldCount() == 2);
-    cffn_s *func_wrap = static_cast<cffn_s *>(
-                Local<External>::Cast(obj->GetInternalField(1))->Value());
-    int argc = args.Length();
-
-    assert(func_wrap->isdlfunc);
-    if (argc != func_wrap->pcount || argc >= MAXDLARGS)
-        ThrowError(isolate, "C function called with incorrect # of arguments");
-
-    assert(vm->dlstr_idx == 0);
-    Local<Value> argv[MAXDLARGS];
-    // N.B.: argv[0] is for the return value
-    for (int i = 0; i < argc; i++)
-        argv[i + 1] = args[i];
-    argv[0] = v8::Undefined(isolate);   // default return type is void
-
-    js_set_errstr(vm, nullptr);
-    ((Fndlfnwrap) func_wrap->fp)(vm, argc, reinterpret_cast<js_val>(argv));
-
-    while (vm->dlstr_idx > 0) {
-        free(vm->dlstr[--vm->dlstr_idx]);
-    }
-    if (vm->errstr)
-        ThrowError(isolate, vm->errstr);
-    args.GetReturnValue().Set(argv[0]);
-}
-
 static struct js_dlfn_s dlfns = {
     to_int,
     to_uint,
@@ -1534,7 +1519,7 @@ static void Load(const FunctionCallbackInfo<Value>& args) {
             break;
         functab[i].isdlfunc = 1;
         Local<ObjectTemplate> templ =
-            Local<ObjectTemplate>::New(isolate, vm->dlfunc_template);
+            Local<ObjectTemplate>::New(isolate, vm->extfunc_template);
         Local<Object> fnObj = templ->NewInstance(context).ToLocalChecked();
         fnObj->SetAlignedPointerInInternalField(0,
              reinterpret_cast<void*>(static_cast<uintptr_t>(V8EXTFUNC<<2)));
@@ -1571,6 +1556,7 @@ static void CreateIsolate(js_vm *vm) {
         hargs[i].flags = ARG_HANDLE;
         vm->args[i] = &hargs[i];
     }
+    vm->dlstr_idx = 0;
 
     // isolate->SetCaptureStackTraceForUncaughtExceptions(true);
     isolate->SetData(0, vm);
@@ -1615,14 +1601,6 @@ static void CreateIsolate(js_vm *vm) {
     ffunc_templ->SetInternalFieldCount(2);
     ffunc_templ->SetCallAsFunctionHandler(CallForeignFunc);
     vm->extfunc_template.Reset(isolate, ffunc_templ);
-
-    // Make the template for dll function objects. There _should_ be no
-    // detectable difference between the two function types in JS (e.g.:
-    // they have the same prototype).
-    Local<ObjectTemplate> dlfn_templ = ObjectTemplate::New(isolate);
-    dlfn_templ->SetInternalFieldCount(2);
-    dlfn_templ->SetCallAsFunctionHandler(CallDlFunc);
-    vm->dlfunc_template.Reset(isolate, dlfn_templ);
 
     vm->undef_handle = new js_handle_s;
     vm->undef_handle->vm = vm;

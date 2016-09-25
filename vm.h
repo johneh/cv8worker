@@ -1,8 +1,7 @@
 #ifndef _VM_H
 #define _VM_H
 
-#define MAXARGS 10
-#define MAXDLARGS	15
+#define MAXARGS 12
 
 // V8 state (Isolate)
 
@@ -26,12 +25,11 @@ struct js_vm_s {
     v8::Persistent<v8::Context> context;
     v8::Persistent<v8::ObjectTemplate> extptr_template;
     v8::Persistent<v8::ObjectTemplate> extfunc_template;
-    v8::Persistent<v8::ObjectTemplate> dlfunc_template;
 
     v8::Persistent<v8::Value> ctype_proto;
     v8::Persistent<v8::Value> cptr_proto;
 
-    char *dlstr[MAXDLARGS];
+    char *dlstr[MAXARGS];
     int dlstr_idx;
 
     js_handle *args[MAXARGS];
