@@ -69,9 +69,4 @@ extern const char *js_errstr(js_vm *vm);
 
 extern void js_gc(js_vm *vm);
 
-#define JSLOAD(vm, libobj_handle) js_load(vm, libobj_handle, js_ffn **fp_)
-#define JSEXPORT(t_) do {\
-*fp_ = t_; return sizeof(t_)/sizeof(t_[0]);\
-} while(0)
-
 #endif

@@ -64,6 +64,7 @@ static Isolate::CreateParams create_params;
 extern "C" {
 
 #include "jsv8.h"
+#include "jsv8dlfn.h"
 
 #ifdef V8TEST
 #define DPRINT(format, args...) \
@@ -72,7 +73,6 @@ fprintf(stderr, format , ## args);
 #define DPRINT(format, args...) /* nothing */
 #endif
 
-typedef int (*Fnload)(js_vm *, js_handle *, js_ffn **);
 
 extern js_coro *choose_coro(chan ch, int64_t ddline);
 static js_handle *init_handle(js_vm *vm,
@@ -91,6 +91,10 @@ static void js_set_errstr(js_vm *vm, const char *str) {
     }
     if (str)
         vm->errstr = estrdup(str, strlen(str));
+}
+
+const char *js_errstr(js_vm *vm) {
+    return vm->errstr;
 }
 
 static void SetError(js_vm *vm, TryCatch *try_catch) {
@@ -367,74 +371,6 @@ static void Malloc(const v8::FunctionCallbackInfo<v8::Value>& args) {
     args.GetReturnValue().Set(obj);
 }
 
-
-#define NEW_EXTFUNC(func_wrap, ptrObj) { \
-    Local<ObjectTemplate> templ = \
-        Local<ObjectTemplate>::New(isolate, vm->extfunc_template); \
-    ptrObj = templ->NewInstance(context).ToLocalChecked(); \
-    ptrObj->SetAlignedPointerInInternalField(0, \
-             reinterpret_cast<void*>(static_cast<uintptr_t>(V8EXTFUNC<<2))); \
-    ptrObj->SetInternalField(1, External::New(isolate, (void *)func_wrap)); \
-    ptrObj->SetPrototype(Local<Value>::New(isolate, vm->ctype_proto)); }
-
-// $load - load a dynamic library.
-// The filename must contain a slash. Any path search should be
-// done in the JS.
-
-// The library must export this routine:
-#define LOAD_FUNC "js_load"
-
-static void Load(const FunctionCallbackInfo<Value>& args) {
-    Isolate *isolate = args.GetIsolate();
-    HandleScope handle_scope(isolate);
-    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
-
-    int argc = args.Length();
-    ThrowNotEnoughArgs(isolate, argc < 1);
-    Local<Context> context = isolate->GetCurrentContext();
-    String::Utf8Value path(args[0]);
-    if (!*path) {
-        ThrowError(isolate, "$load: path is empty string");
-    }
-    if (!strchr(*path, '/')) {
-        args.GetReturnValue().Set(v8::Null(isolate));
-        return;
-    }
-    dlerror();  /* Clear any existing error */
-    void *dl = dlopen(*path, RTLD_LAZY);
-    if (! dl) {
-        ThrowError(isolate, "$load: cannot dlopen library"); /* FIXME: use  dlerror() */
-    }
-
-    Fnload load_func = (Fnload) dlsym(dl, LOAD_FUNC);
-    if (! load_func) {
-        dlclose(dl);
-        ThrowError(isolate, "$load: cannot find library initialization function");
-    }
-
-    js_ffn *functab;
-    js_handle *h1 = js_object(vm);
-    Local<Object> o1 = Local<Object>::Cast(
-            Local<Value>::New(isolate, h1->handle));
-    js_set_errstr(vm, nullptr);
-    int nfunc = load_func(vm, h1, & functab);
-    js_reset(h1);
-    if (nfunc < 0) {
-        dlclose(dl);
-        ThrowError(isolate, vm->errstr ? vm->errstr : "unknown error");
-    }
-    for (int i = 0; i < nfunc; i++) {
-        if (!functab[i].name)
-            break;
-        Local<Object> ptrObj = Local<Object>();
-        NEW_EXTFUNC(&functab[i], ptrObj)
-        o1->Set(context,
-                String::NewFromUtf8(isolate, functab[i].name),
-                ptrObj).FromJust();
-    }
-    args.GetReturnValue().Set(o1);
-}
-
 static void CallForeignFunc(
         const v8::FunctionCallbackInfo<v8::Value>& args) {
 
@@ -452,7 +388,7 @@ static void CallForeignFunc(
     for (int i = 0; i < argc; i++)
         (void) init_handle(vm, vm->args[i], args[i]);
     int err = 0;
-    js_handle *hret = func_wrap->fp(vm, argc, vm->args);
+    js_handle *hret = ((Fnfnwrap) func_wrap->fp)(vm, argc, vm->args);
     Local<Value> retv = Local<Value>();
     if (!hret) {
         retv = v8::Null(isolate);
@@ -597,120 +533,6 @@ coroutine static void recv_coro(js_vm *vm) {
         int rc = mill_chs(vm->ch, &cr);
         assert(rc == 0);
     }
-}
-
-// The second part of the vm initialization.
-static void CreateIsolate(js_vm *vm) {
-    v8init();
-    Isolate* isolate = Isolate::New(create_params);
-    LOCK_SCOPE(isolate)
-
-    assert(isolate->GetCurrentContext().IsEmpty());
-
-    isolate->AddMicrotasksCompletedCallback(v8MicrotasksCompleted);
-    isolate->EnqueueMicrotask(v8Microtask, vm);
-
-    vm->isolate = isolate;
-
-    js_handle *hargs = new js_handle[MAXARGS];
-    for (int i = 0; i < MAXARGS; i++) {
-        hargs[i].vm = vm;
-        hargs[i].flags = ARG_HANDLE;
-        vm->args[i] = &hargs[i];
-    }
-
-    // isolate->SetCaptureStackTraceForUncaughtExceptions(true);
-    isolate->SetData(0, vm);
-
-    Local<ObjectTemplate> global = ObjectTemplate::New(isolate);
-    global->Set(String::NewFromUtf8(isolate, "$print"),
-                FunctionTemplate::New(isolate, Print));
-    global->Set(String::NewFromUtf8(isolate, "$go"),
-                FunctionTemplate::New(isolate, Go));
-    global->Set(String::NewFromUtf8(isolate, "$msleep"),
-                FunctionTemplate::New(isolate, MSleep));
-    global->Set(String::NewFromUtf8(isolate, "$now"),
-                FunctionTemplate::New(isolate, Now));
-    global->Set(String::NewFromUtf8(isolate, "$send"),
-                FunctionTemplate::New(isolate, Send));
-    global->Set(String::NewFromUtf8(isolate, "$close"),
-                FunctionTemplate::New(isolate, Close));
-    global->Set(String::NewFromUtf8(isolate, "$eval"),
-                FunctionTemplate::New(isolate, EvalString));
-    global->Set(String::NewFromUtf8(isolate, "$malloc"),
-                FunctionTemplate::New(isolate, Malloc));
-    global->Set(String::NewFromUtf8(isolate, "$load"),
-                FunctionTemplate::New(isolate, Load));
-
-    Local<Context> context = Context::New(isolate, NULL, global);
-    if (context.IsEmpty()) {
-        fprintf(stderr, "failed to create a V8 context\n");
-        exit(1);
-    }
-
-    vm->context.Reset(isolate, context);
-
-    Context::Scope context_scope(context);
-
-    // Make the template for external(foreign) pointer objects.
-    Local<ObjectTemplate> extptr_templ = ObjectTemplate::New(isolate);
-    extptr_templ->SetInternalFieldCount(2);
-    vm->extptr_template.Reset(isolate, extptr_templ);
-
-    // Make the template for foreign function objects.
-    Local<ObjectTemplate> func_templ = ObjectTemplate::New(isolate);
-    func_templ->SetInternalFieldCount(2);
-    func_templ->SetCallAsFunctionHandler(CallForeignFunc);
-    vm->extfunc_template.Reset(isolate, func_templ);
-
-    vm->undef_handle = new js_handle_s;
-    vm->undef_handle->vm = vm;
-    vm->undef_handle->type = V8UNDEFINED;
-    vm->undef_handle->flags = PERM_HANDLE;
-    vm->undef_handle->handle.Reset(vm->isolate, v8::Undefined(isolate));
-    vm->null_handle = new js_handle_s;
-    vm->null_handle->vm = vm;
-    vm->null_handle->type = V8NULL;
-    vm->null_handle->flags = PERM_HANDLE;
-    vm->null_handle->handle.Reset(vm->isolate, v8::Null(isolate));
-
-    // Create __proto__ for C-type objects.
-    MakeCtypeProto(vm);
-
-    Local<Object> nullptr_obj = extptr_templ->NewInstance(
-                                            context).ToLocalChecked();
-    nullptr_obj->SetAlignedPointerInInternalField(0,
-            reinterpret_cast<void*>(static_cast<uintptr_t>(V8EXTPTR<<2)));
-    nullptr_obj->SetInternalField(1, External::New(isolate, nullptr));
-    nullptr_obj->SetPrototype(Local<Value>::New(isolate, vm->cptr_proto));
-    vm->nullptr_handle = new js_handle_s;
-    vm->nullptr_handle->vm = vm;
-    vm->nullptr_handle->type = V8EXTPTR;
-    vm->nullptr_handle->ptr = nullptr;
-    vm->nullptr_handle->flags = (PERM_HANDLE|PTR_HANDLE);
-    vm->nullptr_handle->handle.Reset(isolate, nullptr_obj);
-
-    // Name the global object "Global".
-    Local<Object> realGlobal = Local<Object>::Cast(
-                        context->Global()->GetPrototype());
-    realGlobal->Set(String::NewFromUtf8(isolate, "Global"), realGlobal);
-    realGlobal->Set(String::NewFromUtf8(isolate, "$nullptr"), nullptr_obj);
-    realGlobal->SetAccessor(context,
-            String::NewFromUtf8(isolate, "$errno"),
-            GlobalGet, GlobalSet).FromJust();
-    vm->global_handle = make_handle(vm, realGlobal, V8OBJECT);
-    vm->global_handle->flags |= PERM_HANDLE;
-}
-
-// Runs in the worker(V8) thread.
-int js8_vminit(js_vm *vm) {
-    CreateIsolate(vm);
-    go(recv_coro(vm));
-    return 0;
-}
-
-const char *js_errstr(js_vm *vm) {
-    return vm->errstr;
 }
 
 // Invoked by the main thread.
@@ -1115,9 +937,15 @@ js_handle *js_cfunc(js_vm *vm, const struct cffn_s *func_wrap) {
     LOCK_SCOPE(isolate);
     Local<Context> context = Local<Context>::New(isolate, vm->context);
     Context::Scope context_scope(context);
-    Local<Object> ptrObj = Local<Object>();
-    NEW_EXTFUNC(func_wrap, ptrObj)
-    return make_handle(vm, ptrObj, V8EXTFUNC);
+    ((struct cffn_s *) func_wrap)->isdlfunc = 0;
+    Local<ObjectTemplate> templ =
+        Local<ObjectTemplate>::New(isolate, vm->extfunc_template);
+    Local<Object> fnObj = templ->NewInstance(context).ToLocalChecked();
+    fnObj->SetAlignedPointerInInternalField(0,
+             reinterpret_cast<void*>(static_cast<uintptr_t>(V8EXTFUNC<<2)));
+    fnObj->SetInternalField(1, External::New(isolate, (void *)func_wrap));
+    fnObj->SetPrototype(Local<Value>::New(isolate, vm->ctype_proto));
+    return make_handle(vm, fnObj, V8EXTFUNC);
 }
 
 // Send from C coroutine to V8
@@ -1173,7 +1001,7 @@ double js_tonumber(js_handle *h) {
     HandleScope handle_scope(isolate);
     Local<Context> context = Local<Context>::New(isolate, h->vm->context);
     double d = Local<Value>::New(isolate, h->handle)
-                -> ToNumber(context).ToLocalChecked()->Value();
+                    -> NumberValue(context).FromJust();
     if (h->type == V8NUMBER) {
         if (h->flags & STR_HANDLE)
             free(h->stp);
@@ -1194,7 +1022,7 @@ int32_t js_toint32(js_handle *h) {
     HandleScope handle_scope(isolate);
     Local<Context> context = Local<Context>::New(isolate, h->vm->context);
     int32_t i = Local<Value>::New(isolate, h->handle)
-                    -> ToInt32(context).ToLocalChecked()->Value();
+                        -> Int32Value(context).FromJust();
     if (h->type == V8NUMBER) {
         if (h->flags & STR_HANDLE)
             free(h->stp);
@@ -1409,8 +1237,8 @@ static void Dispose(const FunctionCallbackInfo<Value>& args) {
                         Local<Object>::Cast(args[0])->GetInternalField(1)
                     )->Value()
             );
-        if (func_wrap->pcount == 1) {
-            h->free_wrap = func_wrap->fp;
+        if (!func_wrap->isdlfunc && func_wrap->pcount == 1) {
+            h->free_wrap = (Fnfnwrap) func_wrap->fp;
             h->flags |= (FREE_WRAP|WEAK_HANDLE);
         }
     }
@@ -1423,7 +1251,6 @@ static void Dispose(const FunctionCallbackInfo<Value>& args) {
                 reinterpret_cast<void*>(static_cast<uintptr_t>(oid)));
     h->handle.SetWeak(h, WeakPtrCallback, WeakCallbackType::kParameter);
     h->handle.MarkIndependent();
-
 }
 
 static void Free(const FunctionCallbackInfo<Value>& args) {
@@ -1486,5 +1313,341 @@ static void MakeCtypeProto(js_vm *vm) {
     // Make the proto object persistent.
     vm->cptr_proto.Reset(isolate, ptr_proto);
 }
+
+////////////////////////////// DLL ///////////////////////////
+#define ARGV reinterpret_cast<Local<Value> *>(argv)[arg_num]
+#define ISOLATE(vm)   (vm->isolate)
+#define CURR_CONTEXT(vm)   ISOLATE(vm)->GetCurrentContext()
+#define CHECK_NUMBER(vm, v) \
+    Local<Value> v = ARGV; \
+    if (! v->IsNumber() && ! v->IsBoolean()) {\
+        js_set_errstr(vm, "C-type argument is not a number");\
+        return 0;\
+    }
+
+// N.B.: unlike js_toint32 etc.  there is no coercion in
+// any of these conversion routines.
+static int to_int(js_vm *vm, int arg_num, js_val argv) {
+    CHECK_NUMBER(vm, v)
+    return v->Int32Value(CURR_CONTEXT(vm)).FromJust();
+}
+
+static double to_double(js_vm *vm, int arg_num, js_val argv) {
+    CHECK_NUMBER(vm, v)
+    return v->NumberValue(CURR_CONTEXT(vm)).FromJust();
+}
+
+// FIXME -- accept void * pointer (V8EXTPTR)
+static char *to_string(js_vm *vm, int arg_num, js_val argv) {
+    Local<Value> v = ARGV;
+    if (!v->IsString() /*&& !v->IsStringObject()*/) {
+        js_set_errstr(vm, "C-type argument is not a string");
+        return nullptr;
+    }
+    Local<String> s = v->ToString(CURR_CONTEXT(vm)).ToLocalChecked();
+    int utf8len = s->Utf8Length();	/* >= 0 */
+    char *p = (char *) emalloc(utf8len + 1);
+    int l = s->WriteUtf8(p, utf8len);
+    p[l] = '\0';
+    /* Keep track of memory so can free upon return; See CallDllFunc() */
+    vm->dlstr[vm->dlstr_idx++] = p;
+    return p;
+}
+
+static void *to_pointer(js_vm *vm, int arg_num, js_val argv) {
+    Local<Value> v = ARGV;
+    if (GetCtypeId(vm, v) != V8EXTPTR) {
+        js_set_errstr(vm, "C-type argument is not a pointer");
+        return nullptr;
+    }
+    return Local<External>::Cast(
+                Local<Object>::Cast(v)->GetInternalField(1))->Value();
+}
+
+#define RETVAL reinterpret_cast<Local<Value> *>(argv)[0]
+
+static void from_int(js_vm *vm, int i, js_val argv) {
+    RETVAL = Integer::New(ISOLATE(vm), i);
+}
+
+static void from_double(js_vm *vm, double d, js_val argv) {
+    RETVAL = Number::New(ISOLATE(vm), d);
+}
+
+// FIXME -- this is a bad idea, use from_pointer and priovide ptr.tostr([length]).
+static void from_string(js_vm *vm, char *ptr, js_val argv) {
+    if (!ptr)
+        RETVAL = Local<Value>::New(ISOLATE(vm),
+                    vm->nullptr_handle->handle);
+    else
+        RETVAL = String::NewFromUtf8(ISOLATE(vm), ptr);
+}
+
+static void from_pointer(js_vm *vm, void *ptr, js_val argv) {
+    if (!ptr)
+        RETVAL = Local<Value>::New(ISOLATE(vm),
+                    vm->nullptr_handle->handle);
+    else
+        RETVAL = WrapPtr(vm, ptr);
+}
+
+static int call_str(js_vm *vm, const char *source, js_val argv) {
+    struct js8_arg_s args;
+    args.type = V8CALLSTR;
+    assert(source);
+    args.vm = vm;
+    args.source = (char *)source;
+    args.nargs = 0;
+    args.h = nullptr;   // this == Global
+    if (argv) {
+        // this
+        args.h = make_handle(vm,
+                    reinterpret_cast<Local<Value> *>(argv)[0], V8UNKNOWN);
+    }
+    js_handle *r = CallFunc(& args);
+    // WaitFor(vm) ???
+    if (args.h)
+        js_reset(args.h);
+    if (r) {
+        js_reset(r);
+        return true; // Success
+    }
+    return false;   // Error
+}
+
+static void CallDlFunc(
+        const v8::FunctionCallbackInfo<v8::Value>& args) {
+    Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
+    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
+    Local<Object> obj = args.Holder();
+
+    assert(obj->InternalFieldCount() == 2);
+    cffn_s *func_wrap = static_cast<cffn_s *>(
+                Local<External>::Cast(obj->GetInternalField(1))->Value());
+    int argc = args.Length();
+
+    assert(func_wrap->isdlfunc);
+    if (argc != func_wrap->pcount || argc >= MAXDLARGS)
+        ThrowError(isolate, "C function called with incorrect # of arguments");
+
+    assert(vm->dlstr_idx == 0);
+    Local<Value> argv[MAXDLARGS];
+    // N.B.: argv[0] is for the return value
+    for (int i = 0; i < argc; i++)
+        argv[i + 1] = args[i];
+    argv[0] = v8::Undefined(isolate);   // default return type is void
+
+    js_set_errstr(vm, nullptr);
+    ((Fndlfnwrap) func_wrap->fp)(vm, argc, reinterpret_cast<js_val>(argv));
+
+    while (vm->dlstr_idx > 0) {
+        free(vm->dlstr[--vm->dlstr_idx]);
+    }
+    if (vm->errstr)
+        ThrowError(isolate, vm->errstr);
+    args.GetReturnValue().Set(argv[0]);
+}
+
+static struct js_dlfn_s dlfns = {
+    to_int,
+    to_double,
+    to_string,
+    to_pointer,
+    from_int,
+    from_double,
+    from_string,
+    from_pointer,
+    call_str,
+    js_errstr
+};
+
+
+typedef int (*Fnload)(js_vm *, js_val, js_dlfn_s *, js_ffn **);
+
+// $load - load a dynamic library.
+// The filename must contain a slash. Any path search should be
+// done in the JS.
+
+static void Load(const FunctionCallbackInfo<Value>& args) {
+    Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
+    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
+
+    int argc = args.Length();
+    ThrowNotEnoughArgs(isolate, argc < 1);
+    Local<Context> context = isolate->GetCurrentContext();
+    String::Utf8Value path(args[0]);
+    if (!*path) {
+        ThrowError(isolate, "$load: path is empty string");
+    }
+    if (!strchr(*path, '/')) {
+        args.GetReturnValue().Set(v8::Null(isolate));
+        return;
+    }
+    dlerror();  /* Clear any existing error */
+    void *dl = dlopen(*path, RTLD_LAZY);
+    if (!dl) {
+        ThrowError(isolate, "$load: cannot dlopen library"); /* FIXME: use  dlerror() */
+    }
+
+    Fnload load_func = (Fnload) dlsym(dl, LOAD_FUNC);
+    if (!load_func) {
+        dlclose(dl);
+        ThrowError(isolate,
+            "$load: cannot find library initialization function");
+    }
+
+    js_ffn *functab;
+    Local<Object> o1 = Object::New(isolate);
+    Local<Value> argv[] = { o1 };
+    js_set_errstr(vm, nullptr);
+    int nfunc = load_func(vm, argv, &dlfns, &functab);
+    if (nfunc < 0) {
+        dlclose(dl);
+        ThrowError(isolate, vm->errstr ? vm->errstr : "unknown error");
+    }
+    for (int i = 0; i < nfunc; i++) {
+        if (!functab[i].name)
+            break;
+        functab[i].isdlfunc = 1;
+        Local<ObjectTemplate> templ =
+            Local<ObjectTemplate>::New(isolate, vm->dlfunc_template);
+        Local<Object> fnObj = templ->NewInstance(context).ToLocalChecked();
+        fnObj->SetAlignedPointerInInternalField(0,
+             reinterpret_cast<void*>(static_cast<uintptr_t>(V8EXTFUNC<<2)));
+        fnObj->SetInternalField(1,
+                    External::New(isolate, (void *)&functab[i]));
+        fnObj->SetPrototype(Local<Value>::New(isolate, vm->ctype_proto));
+
+        o1->Set(context,
+                String::NewFromUtf8(isolate, functab[i].name),
+                fnObj).FromJust();
+    }
+    args.GetReturnValue().Set(o1);
+}
+
+
+///////////////////////////////////////////////////////////////
+
+// The second part of the vm initialization.
+static void CreateIsolate(js_vm *vm) {
+    v8init();
+    Isolate* isolate = Isolate::New(create_params);
+    LOCK_SCOPE(isolate)
+
+    assert(isolate->GetCurrentContext().IsEmpty());
+
+    isolate->AddMicrotasksCompletedCallback(v8MicrotasksCompleted);
+    isolate->EnqueueMicrotask(v8Microtask, vm);
+
+    vm->isolate = isolate;
+
+    js_handle *hargs = new js_handle[MAXARGS];
+    for (int i = 0; i < MAXARGS; i++) {
+        hargs[i].vm = vm;
+        hargs[i].flags = ARG_HANDLE;
+        vm->args[i] = &hargs[i];
+    }
+
+    // isolate->SetCaptureStackTraceForUncaughtExceptions(true);
+    isolate->SetData(0, vm);
+
+    Local<ObjectTemplate> global = ObjectTemplate::New(isolate);
+    global->Set(String::NewFromUtf8(isolate, "$print"),
+                FunctionTemplate::New(isolate, Print));
+    global->Set(String::NewFromUtf8(isolate, "$go"),
+                FunctionTemplate::New(isolate, Go));
+    global->Set(String::NewFromUtf8(isolate, "$msleep"),
+                FunctionTemplate::New(isolate, MSleep));
+    global->Set(String::NewFromUtf8(isolate, "$now"),
+                FunctionTemplate::New(isolate, Now));
+    global->Set(String::NewFromUtf8(isolate, "$send"),
+                FunctionTemplate::New(isolate, Send));
+    global->Set(String::NewFromUtf8(isolate, "$close"),
+                FunctionTemplate::New(isolate, Close));
+    global->Set(String::NewFromUtf8(isolate, "$eval"),
+                FunctionTemplate::New(isolate, EvalString));
+    global->Set(String::NewFromUtf8(isolate, "$malloc"),
+                FunctionTemplate::New(isolate, Malloc));
+    global->Set(String::NewFromUtf8(isolate, "$load"),
+                FunctionTemplate::New(isolate, Load));
+
+    Local<Context> context = Context::New(isolate, NULL, global);
+    if (context.IsEmpty()) {
+        fprintf(stderr, "failed to create a V8 context\n");
+        exit(1);
+    }
+
+    vm->context.Reset(isolate, context);
+
+    Context::Scope context_scope(context);
+
+    // Make the template for external(foreign) pointer objects.
+    Local<ObjectTemplate> extptr_templ = ObjectTemplate::New(isolate);
+    extptr_templ->SetInternalFieldCount(2);
+    vm->extptr_template.Reset(isolate, extptr_templ);
+
+    // Make the template for foreign function objects.
+    Local<ObjectTemplate> ffunc_templ = ObjectTemplate::New(isolate);
+    ffunc_templ->SetInternalFieldCount(2);
+    ffunc_templ->SetCallAsFunctionHandler(CallForeignFunc);
+    vm->extfunc_template.Reset(isolate, ffunc_templ);
+
+    // Make the template for dll function objects. There _should_ be no
+    // detectable difference between the two function types in JS (e.g.:
+    // they have the same prototype).
+    Local<ObjectTemplate> dlfn_templ = ObjectTemplate::New(isolate);
+    dlfn_templ->SetInternalFieldCount(2);
+    dlfn_templ->SetCallAsFunctionHandler(CallDlFunc);
+    vm->dlfunc_template.Reset(isolate, dlfn_templ);
+
+    vm->undef_handle = new js_handle_s;
+    vm->undef_handle->vm = vm;
+    vm->undef_handle->type = V8UNDEFINED;
+    vm->undef_handle->flags = PERM_HANDLE;
+    vm->undef_handle->handle.Reset(vm->isolate, v8::Undefined(isolate));
+    vm->null_handle = new js_handle_s;
+    vm->null_handle->vm = vm;
+    vm->null_handle->type = V8NULL;
+    vm->null_handle->flags = PERM_HANDLE;
+    vm->null_handle->handle.Reset(vm->isolate, v8::Null(isolate));
+
+    // Create __proto__ for C-type objects.
+    MakeCtypeProto(vm);
+
+    Local<Object> nullptr_obj = extptr_templ->NewInstance(
+                                            context).ToLocalChecked();
+    nullptr_obj->SetAlignedPointerInInternalField(0,
+            reinterpret_cast<void*>(static_cast<uintptr_t>(V8EXTPTR<<2)));
+    nullptr_obj->SetInternalField(1, External::New(isolate, nullptr));
+    nullptr_obj->SetPrototype(Local<Value>::New(isolate, vm->cptr_proto));
+    vm->nullptr_handle = new js_handle_s;
+    vm->nullptr_handle->vm = vm;
+    vm->nullptr_handle->type = V8EXTPTR;
+    vm->nullptr_handle->ptr = nullptr;
+    vm->nullptr_handle->flags = (PERM_HANDLE|PTR_HANDLE);
+    vm->nullptr_handle->handle.Reset(isolate, nullptr_obj);
+
+    // Name the global object "Global".
+    Local<Object> realGlobal = Local<Object>::Cast(
+                        context->Global()->GetPrototype());
+    realGlobal->Set(String::NewFromUtf8(isolate, "Global"), realGlobal);
+    realGlobal->Set(String::NewFromUtf8(isolate, "$nullptr"), nullptr_obj);
+    realGlobal->SetAccessor(context,
+            String::NewFromUtf8(isolate, "$errno"),
+            GlobalGet, GlobalSet).FromJust();
+    vm->global_handle = make_handle(vm, realGlobal, V8OBJECT);
+    vm->global_handle->flags |= PERM_HANDLE;
+}
+
+// Runs in the worker(V8) thread.
+int js8_vminit(js_vm *vm) {
+    CreateIsolate(vm);
+    go(recv_coro(vm));
+    return 0;
+}
+
+
 
 }

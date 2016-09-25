@@ -1,15 +1,22 @@
-#include "jsv8.h"
+#define JS_DLL 1
+#include "jsv8dlfn.h"
 
-static js_handle *do_add(js_vm *vm, int argc, js_handle *argv[]) {
-    int i = js_tonumber(argv[0]);
-    int j = js_tonumber(argv[1]);
-    return js_number(vm, i+j);
+static void do_add(js_vm *vm, int argc, js_val argv) {
+    int i = js_dl->to_int(vm, 1, argv);
+    int j = js_dl->to_int(vm, 2, argv);
+    if (js_dl->errstr(vm))
+        return;
+    int r = i + j;
+    js_dl->from_int(vm, r, argv);
 }
 
-static js_handle *do_sub(js_vm *vm, int argc, js_handle *argv[]) {
-    int i = js_tonumber(argv[0]);
-    int j = js_tonumber(argv[1]);
-    return js_number(vm, i-j);
+static void do_sub(js_vm *vm, int argc, js_val argv) {
+    int i = js_dl->to_int(vm, 1, argv);
+    int j = js_dl->to_int(vm, 2, argv);
+    if (js_dl->errstr(vm))
+        return;
+    int r = i - j;
+    js_dl->from_int(vm, r, argv);
 }
 
 static js_ffn ff_table[] = {
@@ -18,13 +25,12 @@ static js_ffn ff_table[] = {
     {0},
 };
 
-int JSLOAD(js_vm *vm, js_handle *hlib) {
-    js_handle *h1 = js_callstr(vm,
+int JS_LOAD(js_vm *vm, js_val libobj) {
+    js_dl = dl_;
+    int rc = js_dl->call_str(vm,
 "(function(){ this.PI = 3.1416;});",
-            hlib, (js_args) {0});
-    if (!h1) return -1;
-    js_reset(h1);
-
-    JSEXPORT(ff_table);
+            libobj);
+    if (!rc) return -1;
+    JS_EXPORT(ff_table);
 }
 
