@@ -1385,7 +1385,11 @@ static double to_double(js_vm *vm, int arg_num, js_val argv) {
 
 static char *to_string(js_vm *vm, int arg_num, js_val argv) {
     Local<Value> v = ARGV;
-    if (!v->IsString() /*&& !v->IsStringObject()*/) {
+    if (!v->IsString()) {
+        if (GetCtypeId(vm, v) == V8EXTPTR) {
+            return (char *) Local<External>::Cast(
+                    Local<Object>::Cast(v)->GetInternalField(1))->Value();
+        }
         js_set_errstr(vm, "C-type argument is not a string");
         return nullptr;
     }
