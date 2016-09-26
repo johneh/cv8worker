@@ -1174,10 +1174,8 @@ static js_handle *CallFunc(struct js8_arg_s *args) {
         argv[i] = Local<Value>::New(isolate, args->a[i]->handle);
     }
 
-//  How to catch ?
-//    Local<Value> result = func->Call(
-//                context, self, argc, argv).ToLocalChecked();
-    Local<Value> result = func->Call(self, argc, argv);
+    Local<Value> result = func->Call(
+            context, self, argc, argv).FromMaybe(Local<Value>());
     if (try_catch.HasCaught()) {
         SetError(vm, &try_catch);
         return NULL;
@@ -1461,8 +1459,7 @@ static int call_str(js_vm *vm, const char *source, js_val argv) {
         self = reinterpret_cast<Local<Value> *>(argv)[0]
                     -> ToObject(context).ToLocalChecked();
     }
-//    func->Call(context, self, 0, nullptr).ToLocalChecked();
-    func->Call(self, 0, nullptr);
+    func->Call(context, self, 0, nullptr).FromMaybe(Local<Value>());
     if (try_catch.HasCaught()) {
         SetError(vm, &try_catch);
         return false;
