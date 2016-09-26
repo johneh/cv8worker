@@ -204,7 +204,7 @@ static void Go(const FunctionCallbackInfo<Value>& args) {
     if (!args[2]->IsFunction())
         ThrowTypeError(isolate, "$go argument #3: function expected");
     cr = new js_coro;
-    cr->coro = nullptr; /* XXX: not used? */
+    cr->coro = nullptr;
     cr->vm = vm;
     cr->callback = make_handle(vm, args[2], V8FUNC);
     cr->inval = make_handle(vm, args[1], V8UNKNOWN);
@@ -334,7 +334,6 @@ static void EvalString(const FunctionCallbackInfo<Value>& args) {
     args.GetReturnValue().Set(result);
 }
 
-// FIXME use this in js_pointer()
 static Local<Object> WrapPtr(js_vm *vm, void *ptr) {
     Isolate *isolate = vm->isolate;
     assert(Locker::IsLocked(isolate));
@@ -392,7 +391,7 @@ static void CallForeignFunc(
         // N.B.: argv[0] is for the return value
         for (int i = 0; i < argc; i++)
             argv[i + 1] = args[i];
-        argv[0] = v8::Undefined(isolate);   // default return type is void
+        argv[0] = v8::Undefined(isolate);   // Default return type is void.
 
         js_set_errstr(vm, nullptr);
         ((Fndlfnwrap) func_wrap->fp)(vm, argc, reinterpret_cast<js_val>(argv));
@@ -753,7 +752,6 @@ js_handle *js_get(js_handle *hobj, const char *key) {
     LOCK_SCOPE(isolate)
     js_vm *vm = hobj->vm;
     Local<Context> context = Local<Context>::New(isolate, vm->context);
-    // Context::Scope context_scope(context);
     Local<Value> v1 = Local<Value>::New(isolate, hobj->handle);
     if (!v1->IsObject()) {
         js_set_errstr(vm, "js_get: object argument expected");
@@ -770,7 +768,6 @@ int js_set(js_handle *hobj, const char *key, js_handle *hval) {
     Isolate *isolate = hobj->vm->isolate;
     LOCK_SCOPE(isolate)
     Local<Context> context = Local<Context>::New(isolate, hobj->vm->context);
-    // Context::Scope context_scope(context);
     Local<Value> v1 =  Local<Value>::New(isolate, hobj->handle);
     if (!v1->IsObject()) {
         js_set_errstr(hobj->vm, "js_set: object argument expected");
@@ -785,7 +782,6 @@ int js_set_string(js_handle *hobj,
             const char *name, const char *val) {
     Isolate *isolate = hobj->vm->isolate;
     LOCK_SCOPE(isolate)
-    // Local<Context> context = Local<Context>::New(isolate, hobj->vm->context);
     Local<Value> v1 = Local<Value>::New(isolate, hobj->handle);
     if (!v1->IsObject()) {
         js_set_errstr(hobj->vm, "js_set_string: object argument expected");
@@ -927,14 +923,7 @@ js_handle *js_pointer(js_vm *vm, void *ptr) {
     Context::Scope context_scope(context);
     if (!ptr)
         return vm->nullptr_handle;
-    Local<ObjectTemplate> templ =
-            Local<ObjectTemplate>::New(isolate, vm->extptr_template);
-    Local<Object> obj = templ->NewInstance(context).ToLocalChecked();
-    void *ptr1 = reinterpret_cast<void*>(static_cast<uintptr_t>(V8EXTPTR<<2));
-    obj->SetAlignedPointerInInternalField(0, ptr1);
-    obj->SetInternalField(1, External::New(isolate, ptr));
-    obj->SetPrototype(Local<Value>::New(isolate, vm->ctype_proto));
-    js_handle *h = make_handle(vm, obj, V8EXTPTR);
+    js_handle *h = make_handle(vm, WrapPtr(vm, ptr), V8EXTPTR);
     h->ptr = ptr;
     h->flags |= PTR_HANDLE;
     h->free_func = (Fnfree) nullptr;
@@ -1221,7 +1210,7 @@ static void Ctype(const FunctionCallbackInfo<Value>& args) {
     HandleScope handle_scope(isolate);
     js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
     Local<Object> obj = args.This();
-    assert(args.Holder() == args.This()); // unlike in accessor callback, true here!
+    assert(args.Holder() == args.This()); // N.B.: not true in accessor callback.!
     int id = GetCtypeId(vm, obj);
     if (id == V8EXTPTR)
         args.GetReturnValue().Set(String::NewFromUtf8(isolate, "C-pointer"));
@@ -1298,7 +1287,7 @@ static void NotNull(const FunctionCallbackInfo<Value>& args) {
     void *ptr = Local<External>::Cast(obj->GetInternalField(1))->Value();
     if (!ptr)
         ThrowError(isolate, "notNull: pointer is null");
-    // return the pointer to facilitate chaining:
+    // Return the pointer to facilitate chaining:
     //  ptr = foo().notNull();
     args.GetReturnValue().Set(obj);
 }
@@ -1367,8 +1356,8 @@ static void MakeCtypeProto(js_vm *vm) {
         return 0;\
     }
 
-// N.B.: unlike js_toint32 etc.  there is no coercion in
-// any of these conversion routines.
+// N.B.: There is no type coercion in any of these JS to C
+// conversion routines.
 static int to_int(js_vm *vm, int arg_num, js_val argv) {
     CHECK_NUMBER(vm, v)
     return v->Int32Value(CURR_CONTEXT(vm)).FromJust();
@@ -1399,7 +1388,7 @@ static char *to_string(js_vm *vm, int arg_num, js_val argv) {
     char *p = (char *) emalloc(utf8len + 1);
     int l = s->WriteUtf8(p, utf8len);
     p[l] = '\0';
-    /* Keep track of memory so can free upon return; See CallDllFunc() */
+    /* Keep track of memory so can free upon return; See CallForeignFunc() */
     vm->dlstr[vm->dlstr_idx++] = p;
     return p;
 }
@@ -1448,7 +1437,7 @@ static int call_str(js_vm *vm, const char *source, js_val argv) {
     Local<Value> v1 = Local<Value>::New(isolate, hr->handle);
     js_reset(hr);
     if (!v1->IsFunction()) {
-        js_set_errstr(vm, "call_str: function expression argument (#1) expected");
+        js_set_errstr(vm, "call_str: argument is not a function expression");
         return false;
     }
     Local<Function> func = Local<Function>::Cast(v1);
@@ -1659,7 +1648,5 @@ int js8_vminit(js_vm *vm) {
     go(recv_coro(vm));
     return 0;
 }
-
-
 
 }
