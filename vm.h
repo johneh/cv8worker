@@ -33,7 +33,12 @@ struct js_vm_s {
     int dlstr_idx;
 
     js_handle *args[MAXARGS];
+#ifdef V8TEST
+    int weak_counter;
+#endif
 };
+
+typedef struct js_vm_s js_vm;
 
 struct js_handle_s {
     enum js_code type;
@@ -46,7 +51,8 @@ struct js_handle_s {
 #define VALUE_MASK (DBL_HANDLE|STR_HANDLE|INT32_HANDLE|PTR_HANDLE)
 #define ARG_HANDLE  (1 << 5)
 #define WEAK_HANDLE (1 << 6)
-#define FREE_WRAP (1 << 7)
+#define FREE_EXTWRAP    (1 << 7)
+#define FREE_DLWRAP (1 << 8)
 
     union {
         double d;
@@ -57,12 +63,12 @@ struct js_handle_s {
     js_vm *vm;
     union {
         Fnfree free_func;
-        struct js_handle_s *(*free_wrap)(js_vm *, int, struct js_handle_s *[]);
+        struct js_handle_s *(*free_extwrap)(js_vm *, int, struct js_handle_s *[]);
+        void (*free_dlwrap)(js_vm *, int, void *argv);
     };
     v8::Persistent<v8::Value> handle;
 };
 
-typedef struct js_vm_s js_vm;
 
 #define LOCK_SCOPE(isolate) \
 Locker locker(isolate); \

@@ -49,6 +49,7 @@ struct js8_arg_s {
     /* input + output */
     volatile union {
         js_handle *h;
+        int weak_counter;
     };
 };
 

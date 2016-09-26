@@ -216,6 +216,7 @@ void efree(void *ptr) {
 
 static js_ffn fe = {1, ff_efree };
 
+/* make GCTEST=1 */
 void testdispose(js_vm *vm) {
     js_handle *h1 = js_cfunc(vm, &fe);
     int rc = js_set(JSGLOBAL(vm), "efree", h1);
@@ -233,6 +234,27 @@ p1.free();p1=$malloc(8);p1.dispose(efree);});",
     assert(free_count == 2);
 }
 
+/* make GCTEST=1 */
+void testdll(js_vm *vm) {
+    int rc = js_run(vm, "(function() {\
+var cairo = $load('./libcairojs.so');\
+var surface = cairo.image_surface_create(\
+                    cairo.CAIRO_FORMAT_ARGB32, 120, 100).notNull();\
+var cr = cairo.create(surface).notNull();\
+surface.dispose(cairo.surface_destroy);\
+cr.dispose(cairo.destroy);\
+cairo.set_source_rgb(cr, 1, 0, 0);\
+cairo.rectangle(cr, 10, 10, 100, 80);\
+cairo.fill(cr);\
+cairo.surface_write_to_png(surface, 'crect.png');\
+/*cairo.destroy(cr);*/\
+/*cairo.surface_destroy(surface);*/})();"
+    );
+    CHECK(rc, vm);
+    int weak_counter = js_gc(vm);
+    assert(weak_counter == 2);
+}
+
 int main(int argc, char *argv[]) {
     mill_init(-1, 0);
     mill_worker w = mill_worker_create();
@@ -243,7 +265,8 @@ int main(int argc, char *argv[]) {
     testexports(vm);
     testsend(vm);
     testarraybuffer(vm);
-    /* testdispose(vm); -- requires V8TEST defined */
+    /* testdispose(vm); */ /* make GCTEST=1 */
+    /* testdll(vm); */    /* make GCTEST=1 */
 
     js_vmclose(vm);
     mill_worker_delete(w);

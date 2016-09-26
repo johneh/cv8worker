@@ -101,11 +101,12 @@ js_handle *js_callstr(js_vm *vm, const char *source,
     return args.h;
 }
 
-void js_gc(js_vm *vm) {
+int js_gc(js_vm *vm) {
     struct js8_arg_s args;
     args.type = V8GC;
     args.vm = vm;
     js_sched(&args);
+    return args.weak_counter;
 }
 
 js_coro *choose_coro(chan ch, int64_t ddline) {

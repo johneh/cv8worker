@@ -1088,18 +1088,27 @@ void js_reset(js_handle *h) {
 static void WeakPtrCallback(
         const v8::WeakCallbackInfo<js_handle> &data) {
     js_handle *h = data.GetParameter();
-    Isolate *isolate = h->vm->isolate;
-    if (h->flags & FREE_WRAP) {
+    js_vm *vm = h->vm;
+    Isolate *isolate = vm->isolate;
+    if (h->flags & FREE_EXTWRAP) {
         js_handle *ah[1] = {h};
-        js_handle *hret = h->free_wrap(h->vm, 1, ah);
+        js_handle *hret = h->free_extwrap(vm, 1, ah);
         if (hret) // should be NULL
             js_reset(hret);
+    } else if (h->flags & FREE_DLWRAP) {
+        HandleScope handle_scope(isolate);
+        Local<Value> av[1];
+        av[0] = Local<Value>::New(isolate, h->handle);
+        h->free_dlwrap(vm, 1, reinterpret_cast<js_val>(av));
     } else if (h->free_func)
         h->free_func(h->ptr);
     h->handle.Reset();
     delete h;
     isolate->AdjustAmountOfExternalAllocatedMemory(
                 - static_cast<int64_t>(sizeof(js_handle)));
+#ifdef V8TEST
+    vm->weak_counter++;
+#endif
 }
 
 void js_dispose(js_handle *h, Fnfree free_func) {
@@ -1190,8 +1199,10 @@ int js8_do(struct js8_arg_s *args) {
         Isolate *isolate = args->vm->isolate;
         Locker locker(isolate);
         Isolate::Scope isolate_scope(isolate);
+        args->vm->weak_counter = 0;
         isolate->RequestGarbageCollectionForTesting(
                             Isolate::kFullGarbageCollection);
+        args->weak_counter = args->vm->weak_counter;
     }
 #endif
         break;
@@ -1247,8 +1258,11 @@ static void Dispose(const FunctionCallbackInfo<Value>& args) {
                     )->Value()
             );
         if (!func_wrap->isdlfunc && func_wrap->pcount == 1) {
-            h->free_wrap = (Fnfnwrap) func_wrap->fp;
-            h->flags |= (FREE_WRAP|WEAK_HANDLE);
+            h->free_extwrap = (Fnfnwrap) func_wrap->fp;
+            h->flags |= (FREE_EXTWRAP|WEAK_HANDLE);
+        } else if (func_wrap->isdlfunc && func_wrap->pcount == 1) {
+            h->free_dlwrap = (Fndlfnwrap) func_wrap->fp;
+            h->flags |= (FREE_DLWRAP|WEAK_HANDLE);
         }
     }
     if (!(h->flags & WEAK_HANDLE)) {

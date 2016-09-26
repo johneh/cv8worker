@@ -67,6 +67,6 @@ extern void js_send(js_coro *t, js_handle *oh, int err);
 extern js_handle *js_error(js_vm *vm, const char *message);
 extern const char *js_errstr(js_vm *vm);
 
-extern void js_gc(js_vm *vm);
+extern int js_gc(js_vm *vm);
 
 #endif
