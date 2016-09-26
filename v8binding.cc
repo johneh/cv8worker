@@ -1174,6 +1174,9 @@ static js_handle *CallFunc(struct js8_arg_s *args) {
         argv[i] = Local<Value>::New(isolate, args->a[i]->handle);
     }
 
+//  How to catch ?
+//    Local<Value> result = func->Call(
+//                context, self, argc, argv).ToLocalChecked();
     Local<Value> result = func->Call(self, argc, argv);
     if (try_catch.HasCaught()) {
         SetError(vm, &try_catch);
@@ -1436,27 +1439,35 @@ static void from_pointer(js_vm *vm, void *ptr, js_val argv) {
 }
 
 static int call_str(js_vm *vm, const char *source, js_val argv) {
-    struct js8_arg_s args;
-    args.type = V8CALLSTR;
-    assert(source);
-    args.vm = vm;
-    args.source = (char *)source;
-    args.nargs = 0;
-    args.h = nullptr;   // this == Global
+    Isolate *isolate = vm->isolate;
+    HandleScope handle_scope(isolate);
+    Local<Context> context = isolate->GetCurrentContext();
+
+    // Must be a function expression.
+    js_handle *hr = CompileRun(vm, source);
+    if (!hr)
+        return false;
+    Local<Value> v1 = Local<Value>::New(isolate, hr->handle);
+    js_reset(hr);
+    if (!v1->IsFunction()) {
+        js_set_errstr(vm, "call_str: function expression argument (#1) expected");
+        return false;
+    }
+    Local<Function> func = Local<Function>::Cast(v1);
+
+    TryCatch try_catch(isolate);
+    Local<Object> self = context->Global();
     if (argv) {
-        // this
-        args.h = make_handle(vm,
-                    reinterpret_cast<Local<Value> *>(argv)[0], V8UNKNOWN);
+        self = reinterpret_cast<Local<Value> *>(argv)[0]
+                    -> ToObject(context).ToLocalChecked();
     }
-    js_handle *r = CallFunc(& args);
-    // WaitFor(vm) ???
-    if (args.h)
-        js_reset(args.h);
-    if (r) {
-        js_reset(r);
-        return true; // Success
+//    func->Call(context, self, 0, nullptr).ToLocalChecked();
+    func->Call(self, 0, nullptr);
+    if (try_catch.HasCaught()) {
+        SetError(vm, &try_catch);
+        return false;
     }
-    return false;   // Error
+    return true;
 }
 
 static struct js_dlfn_s dlfns = {
