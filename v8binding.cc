@@ -592,6 +592,10 @@ static js_handle *init_handle(js_vm *vm,
         h->type = V8STRING;
     else if (value->IsNumber())
         h->type = V8NUMBER;
+    else if (value->IsNull())
+        h->type = V8NULL;
+    else if (value->IsUndefined())
+        h->type = V8UNDEFINED;
     else if (value->IsArray())
         h->type = V8ARRAY;
     else if (value->IsObject()) {
@@ -607,11 +611,7 @@ static js_handle *init_handle(js_vm *vm,
             h->type = (enum js_code) id;
         } else
             h->type = V8OBJECT;
-    } else if (value->IsNull())
-        h->type = V8NULL;
-    else if (value->IsUndefined())
-        h->type = V8UNDEFINED;
-    else
+    } else
         h->type = V8UNKNOWN;
     h->handle.Reset(vm->isolate, value);
     return h;

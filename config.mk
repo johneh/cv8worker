@@ -2,16 +2,17 @@
 # With i18nsupport on, append third_part/icu/libicu{uc,i18n,data}.a
 # to V8_LIBS
 
+V8_DIR = $(HOME)/src/v8
+MILL_DIR = $(HOME)/t/libmill_worker
+
 CC = gcc
 CPP = g++
 CFLAGS = -g -O2 -Wall
 CPPFLAGS = -g -O2 -Wall
-#MILL_LIBS = -L$(HOME)/opt/lib -lmill
-MILL_DIR = $(HOME)/t/libmill_worker
+
 MILL_LIBS = $(MILL_DIR)/lib/libmill.a
 MILL_INCLUDES = $(MILL_DIR)/include
 
-V8_DIR = $(HOME)/src/v8
 V8_TARGET = x64.release
 V8_INCLUDES = -I$(V8_DIR) -I$(V8_DIR)/include
 V8_OUTDIR = $(V8_DIR)/out/$(V8_TARGET)

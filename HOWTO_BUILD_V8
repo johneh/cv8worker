@@ -25,10 +25,10 @@ out/x64.release/obj.target/src/libv8_external_snapshot.a
 out/x64.release/obj.target/src/libv8_base.a
 ...
 
-We can then set these variables in our Makefile:
+We can then set these variables in config.mk:
 
 V8_DIR = $(HOME)/src/v8
-V8_INCLUDES = -I$(V8_DIR) -I$(V8_DIR)/include
 V8_TARGET = x64.release
+V8_INCLUDES = -I$(V8_DIR) -I$(V8_DIR)/include
 V8_OUTDIR = $(V8_DIR)/out/$(V8_TARGET)
 V8_LIBDIR = $(V8_OUTDIR)/obj.target/src
