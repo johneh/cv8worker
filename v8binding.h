@@ -20,8 +20,12 @@ struct js_coro_s {
 
 enum js_code {
     V8UNKNOWN = 0,
+    /* begin ctypes */
     V8EXTPTR,
     V8EXTFUNC,
+    V8INT64,
+    V8UINT64,
+    /* end ctypes */
     V8UNDEFINED,
     V8NULL,
     V8NUMBER,

@@ -25,6 +25,8 @@ struct js_vm_s {
     v8::Persistent<v8::Context> context;
     v8::Persistent<v8::ObjectTemplate> extptr_template;
     v8::Persistent<v8::ObjectTemplate> extfunc_template;
+    v8::Persistent<v8::ObjectTemplate> i64_template;
+    v8::Persistent<v8::ObjectTemplate> ui64_template;
 
     v8::Persistent<v8::Value> ctype_proto;
     v8::Persistent<v8::Value> cptr_proto;
