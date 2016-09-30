@@ -8,6 +8,7 @@
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Tooling.h"
+#include "clang/AST/RecordLayout.h"
 
 using namespace clang;
 using namespace clang::driver;
@@ -167,33 +168,50 @@ struct CEnum {
     }
 };
 
+struct CRecord {
+    std::string recName;
+    std::string typedefName;
+    unsigned size;
+    bool isanon;
+    std::string offsets;
+    CRecord(): recName(), typedefName(), size(0), isanon(false), offsets() {}
+};
+
 // RecursiveASTVisitor does a pre-order depth-first traversal of the AST
 class CVisitor : public RecursiveASTVisitor<CVisitor> {
 public:
     explicit CVisitor(SourceManager &s, std::vector<CEnum *> &e,
+                std::vector<CRecord *> &r,
                 std::string &fns, std::string &file)
-        : m_sm(s), m_enums(e), m_fns(fns), m_file(file) {}
+        : m_sm(s), m_enums(e), m_records(r), m_fns(fns), m_file(file) {}
 
     bool VisitDecl(Decl *decl) {
         FullSourceLoc fullLoc(decl->getLocStart(), m_sm);
         if (!fullLoc.isValid())
             return true;
         const std::string &fileName = m_sm.getFilename(fullLoc);
-        if (fileName != m_file) // skip included headers
+        if (fileName != m_file) // Skip all included headers.
             return true;
 
         if (decl->getKind() == Decl::Enum) {
             const EnumDecl *enumDecl = dyn_cast<EnumDecl>(decl);
+            /*
+             * Consider;
+             *  typedef enum foo foo_t;
+             *  enum foo { ... };
+             if (!enumDecl->isThisDeclarationADefinition())
+                return true;
+             */
+
+
 #if 0
             const std::string &fileName = m_sm.getFilename(fullLoc);
             cout << "enum " << fileName <<":"<<fullLoc.getSpellingLineNumber()<<"\n";
 #endif
-            CEnum *ce = FindEnumByName(enumDecl->getNameAsString());
-            if (!ce) {
-                ce = new CEnum();
-                ce->enumName = enumDecl->getNameAsString();
-                m_enums.push_back(ce);
-            }
+
+            // Uses typedef name for an anonymous enum.
+            CEnum *ce = getCEnum(enumDecl);
+
             for (EnumDecl::enumerator_iterator enumerator = enumDecl->enumerator_begin();
                         enumerator != enumDecl->enumerator_end(); ++enumerator) {
                 // const QualType type(enumerator->getType());
@@ -214,21 +232,23 @@ public:
 #endif
 
             QualType qType = typedefDecl->getUnderlyingType();
-            const Type *cType = qType.getTypePtrOrNull();
-            if (cType) {
-                TagDecl *tagDecl = cType->getAsTagDecl();
-                if (tagDecl && tagDecl->getKind() == Decl::Enum) {
-                    const EnumDecl *enumDecl = dyn_cast<clang::EnumDecl>(tagDecl);
-                    //cout << "typedef enum ... "<< enumDecl->getNameAsString()<<"\n";
-                    CEnum *ce = FindEnumByName(enumDecl->getNameAsString());
-                    if (!ce && m_enums.size() > 0) {
-                        // e.g.: typedef enum { .. } color_t;
-                        // must be the last entry with empty name?
-                        ce = m_enums[m_enums.size() - 1];
-                        ASSERT(ce->enumName == "" && ce->typedefName == "");
+            if (TagDecl *tagDecl = qType->getAsTagDecl()) {
+                if (tagDecl->getKind() == Decl::Enum) {
+                    CEnum *ce = findCEnumByName(tagDecl->getNameAsString());
+                    if (! ce) {
+                        ce = findCEnumByTypedefName(typedefDecl->getNameAsString());
+                        ASSERT(ce);
+                    } else {
+                        ce->typedefName = typedefDecl->getNameAsString();
                     }
-                    ASSERT(ce);
-                    ce->typedefName = typedefDecl->getNameAsString();
+                } else if (tagDecl->getKind() == Decl::Record) {
+                    // XXX: class TagDecl: isUnion(), isStruct(), isEnum()
+                    if (findCRecordByTypedefName(typedefDecl->getNameAsString())) {
+                        return true;
+                    }
+                    // cannot be an anonymous record
+                    CRecord *cr = getCRecord(tagDecl->getNameAsString());
+                    cr->typedefName = typedefDecl->getNameAsString();
                 }
             }
         }
@@ -242,7 +262,6 @@ public:
                 cout << fileName <<":"<<fullLoc.getSpellingLineNumber()<<"\n";
 #endif
                 const std::string fName = funcDecl->getNameAsString();
-                // cout << funcDecl->getReturnType().getAsString() << "\n";
                 MakeWrapStart(fName, funcDecl->getNumParams());
                 for (unsigned i = 0, j = funcDecl->getNumParams(); i != j; ++i) {
                     const ParmVarDecl *paramDecl = funcDecl->getParamDecl(i);
@@ -252,12 +271,34 @@ public:
                 MakeWrapEnd(ParseType(funcDecl->getReturnType()),
                             fName, funcDecl->getNumParams());
             }
+        } else if (decl->getKind() == Decl::Record) {
+            RecordDecl *recDecl = dyn_cast<RecordDecl>(decl);
+            std::string recName = recDecl->getNameAsString();
+            int isAnonRecord = false;
+            if (recName == "") {
+                recName = generateAnonName(recDecl);
+                isAnonRecord = true;
+            }
+            CRecord *cr = getCRecord(recName);
+            cr->isanon = isAnonRecord;
+            if (isAnonRecord) {
+                if (TypedefNameDecl *tD = recDecl->getTypedefNameForAnonDecl()) {
+                    cr->typedefName = tD->getNameAsString();
+                }
+            }
+            recDecl = recDecl->getDefinition();
+            if (!recDecl)
+                return true;
+            const ASTRecordLayout &recLayout = recDecl
+                        ->getASTContext().getASTRecordLayout(recDecl);
+            cr->size = recLayout.getSize().getQuantity();
+            cr->offsets = getFieldOffsets(recDecl, recLayout);
         }
         return true;
     }
 
 protected:
-    CEnum *FindEnumByName(const std::string& name) {
+    CEnum *findCEnumByName(const std::string& name) {
         if (name == "")
             return nullptr;
         for (unsigned k = 0; k < m_enums.size(); k++) {
@@ -268,12 +309,60 @@ protected:
         return nullptr;
     }
 
-    CEnum *FindEnumByTypedefName(const std::string& name) {
+    CEnum *findCEnumByTypedefName(const std::string& name) {
         ASSERT(name != "");
         for (unsigned k = 0; k < m_enums.size(); k++) {
             CEnum *ce = m_enums[k];
             if (ce->typedefName == name)
                 return ce;
+        }
+        return nullptr;
+    }
+
+    CEnum *getCEnum(const EnumDecl *eD) {
+        CEnum *ce = nullptr;
+        std::string name = eD->getNameAsString();
+        bool isTypedefName = false;
+        if (name != "") {
+            if ((ce = findCEnumByName(name)))
+                return ce;
+        } else {
+            TypedefNameDecl *tD = eD->getTypedefNameForAnonDecl();
+            if (tD && (name = tD->getNameAsString()) != ""
+                    && (ce = findCEnumByTypedefName(name)))
+                return ce;
+            isTypedefName = true;
+        }
+        ASSERT(name != "");
+        ce = new CEnum();
+        if (isTypedefName)
+            ce->typedefName = name;
+        else
+            ce->enumName = name;
+        m_enums.push_back(ce);
+        return ce;
+    }
+
+    CRecord *getCRecord(const std::string& name) {
+        ASSERT(name != "");
+        CRecord *cr;
+        for (unsigned k = 0; k < m_records.size(); k++) {
+            cr = m_records[k];
+            if (cr->recName == name)
+                return cr;
+        }
+        cr = new CRecord();
+        cr->recName = name;
+        m_records.push_back(cr);
+        return cr;
+    }
+
+    CRecord *findCRecordByTypedefName(const std::string& name) {
+        ASSERT(name != "");
+        for (unsigned k = 0; k < m_records.size(); k++) {
+            CRecord *cr = m_records[k];
+            if (cr->typedefName == name)
+                return cr;
         }
         return nullptr;
     }
@@ -365,8 +454,114 @@ protected:
     }
 
 private:
+
+    std::string generateAnonName(const NamedDecl* d) {
+        assert(d->getDeclName().isEmpty());
+        FullSourceLoc loc(d->getLocStart(), m_sm);
+        if (loc.isValid()) {
+            const std::string &fileName = m_sm.getFilename(loc);
+            return "@" + fileName + ":"
+                + std::to_string(loc.getSpellingLineNumber());
+        }
+        return "";
+    }
+
+    CRecord *getEmbeddedRecord(FieldDecl *fieldDecl) {
+        //  fieldDecl->getDeclName().dump();
+        std::string rName;
+        bool isAnonymous = false;
+        if (fieldDecl->isAnonymousStructOrUnion()) {
+            // Anonymous union without a member name.
+            ASSERT(fieldDecl->getDeclName().isEmpty());
+            rName = generateAnonName(fieldDecl);
+            isAnonymous = true;
+        } else {
+            const Type* fType = fieldDecl->getType().getTypePtr();
+            assert(fType);
+            if (fType->getTypeClass() == Type::Elaborated) {
+                const ElaboratedType *eType = fType->getAs<clang::ElaboratedType>();
+                const Type* namedType = eType->getNamedType().getTypePtr();
+                ASSERT(namedType);
+                if (namedType->getTypeClass() == Type::Record) {
+                    RecordDecl *rD = namedType->getAs<clang::RecordType>()->getDecl();
+                    ASSERT(rD);
+                    rD = rD->getDefinition();
+                    ASSERT(rD);
+                    rName = rD->getNameAsString();
+                    if (rName == "") {
+                        // Anonymous record with a member name.
+                        rName = generateAnonName(rD);
+                        isAnonymous = true;
+                    }
+                }
+            }
+        }
+        if (rName == "")
+            return nullptr;
+        CRecord *cr = getCRecord(rName);
+        cr->isanon = isAnonymous;
+        return cr;
+    }
+
+    std::string getFieldOffsets(RecordDecl *recDecl, const ASTRecordLayout &recLayout) {
+        int fieldNo = 0;
+        std::string s("{ ");
+        for (RecordDecl::field_iterator field = recDecl->field_begin(),
+                end = recDecl->field_end(); field != end; ++field, ++fieldNo) {
+
+            // field->getType()
+            // field->isAnonymousStructOrUnion()
+            // field->isBitField()
+            // field->isUnnamedBitField()
+            // field->getFieldIndex() == fieldNo
+
+            CRecord *cr = getEmbeddedRecord(*field);
+            // if (! cr) ParseType(field->getType());
+            cr = nullptr;   // Avoid warning
+
+            uint64_t offsetInBits = recLayout.getFieldOffset(fieldNo); // in bits
+            int offset = recDecl->getASTContext().toCharUnitsFromBits(
+                                                offsetInBits).getQuantity();
+            if (fieldNo > 0)
+                s += ", ";
+
+            std::string fieldName = field->getNameAsString();
+#if 0
+            if (fieldName == "") {
+                // Embedded anonymous union without a field name.
+                // struct { ..; union { int i; double d; }; .. }
+                if (cr) {
+                    // Using the generarted union name as the identifier
+                    fieldName = cr->recName;
+                }
+            }
+#endif
+            if (fieldName == "") {
+                // Embedded anonymous union without a field name.
+                // struct { ..; union { int i; double d; }; .. }
+                if (const RecordType *rT = field->getType()->getAs<RecordType>()) {
+                    const RecordDecl *rD = rT->getDecl();
+                    if (rD->isUnion()) {
+                        if (const FieldDecl *fD = rD->findFirstNamedDataMember()) {
+                            fieldName = fD->getNameAsString();
+                        }
+                    }
+                }
+            }
+
+            ASSERT((fieldName != "") && "Field without a name");
+
+            s += fieldName;
+            s += " : ";
+            s += std::to_string(offset);
+        }
+        return s + " }";
+    }
+
+private:
     SourceManager &m_sm;
-    std::vector<CEnum *>&m_enums;
+    std::vector<CEnum *> &m_enums;
+    std::vector<CRecord *> &m_records;  // struct and unions
     std::string &m_fns;
     std::string m_file;
 };
@@ -374,19 +569,27 @@ private:
 
 class CConsumer : public ASTConsumer {
 public:
-    explicit CConsumer(SourceManager &s, std::vector<CEnum *> &enums,
+    explicit CConsumer(CompilerInstance &ci, std::vector<CEnum *> &enums,
+                std::vector<CRecord *> &recs,
                 std::string &fns, std::string file)
-        : m_visitor(CVisitor(s, enums, fns, file)) {}
+        : m_ci(ci), m_visitor(CVisitor(ci.getSourceManager(),
+                enums, recs, fns, file)) {}
 
     // Called by the parser for each top-level declaration.
     virtual bool HandleTopLevelDecl(DeclGroupRef dg) override {
         for (Decl *decl : dg) {
+            if (m_ci.getDiagnostics().hasErrorOccurred()) {
+                // TODO: Bail out ...
+                // cout << "[[[[[[[[[[[[[[[[[ ERROR ]]]]]]]]]]]]]]]]]\n";
+                ;
+            }
             m_visitor.TraverseDecl(decl);
         }
         return true;
     }
 
 private:
+    CompilerInstance &m_ci;
     CVisitor m_visitor;
 };
 
@@ -416,7 +619,7 @@ public:
         fprintf(stdout, "static const char source_str_[] = \"(function(){\\\n");
         for (unsigned k = 0; k < m_enums.size(); k++) {
             CEnum *ce = m_enums[k];
-            if (ce->items.size() == 0)
+            if (ce->items.size() == 0)  // not defined
                 continue;
             const std::string& eName = ce->typedefName != "" ? ce->typedefName
                             : ce->enumName;
@@ -440,6 +643,33 @@ public:
                     ce->items[i]->name.c_str(), ce->items[i]->value);
             }
         }
+
+#if 0
+        fprintf(stdout, "this['#records'] = {};\n");
+        for (unsigned k = 0; k < m_records.size(); k++) {
+            CRecord *r = m_records[k];
+            if (r->offsets != "")
+                fprintf(stdout, "this['#records']['%s'] = %s;\n",
+                                r->recName.c_str(), r->offsets.c_str());
+            // << ": " << r->typedefName << "\n";
+        }
+#endif
+
+        fprintf(stdout, "var _s;\\\n");
+        for (unsigned k = 0; k < m_records.size(); k++) {
+            CRecord *r = m_records[k];
+            if (r->offsets == "")
+                continue;
+            if (r->isanon && r->typedefName == "")
+                continue;
+            fprintf(stdout, "_s = %s; _s['#size'] = %d;\\\n",
+                            r->offsets.c_str(), r->size);
+            if (!r->isanon)
+                fprintf(stdout, "this.%s = _s;\\\n", r->recName.c_str());
+            if (r->typedefName != "")
+                fprintf(stdout, "this.%s = _s;\\\n", r->typedefName.c_str());
+        }
+
         fprintf(stdout, "});\";\n\n");
 
         fprintf(stdout, "int JS_LOAD(js_vm *vm, js_val vobj) {\n");
@@ -454,17 +684,21 @@ public:
     std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &ci,
                                 llvm::StringRef file) override {
         return llvm::make_unique<CConsumer>(
-                        ci.getSourceManager(), m_enums, m_fns, file.str());
+                        ci,  m_enums, m_records, m_fns, file.str());
     }
 
     ~CFrontendAction() {
         for (unsigned k = 0; k < m_enums.size(); k++) {
             delete m_enums[k];
         }
+        for (unsigned k = 0; k < m_records.size(); k++) {
+            delete m_records[k];
+        }
     }
 
 private:
     std::vector<CEnum *> m_enums;
+    std::vector<CRecord *> m_records;
     std::string m_fns;
 };
 
@@ -477,5 +711,4 @@ int main(int argc, const char **argv) {
     ClangTool tool(op.getCompilations(), op.getSourcePathList());
     return tool.run(newFrontendActionFactory<CFrontendAction>().get());
 }
-
 

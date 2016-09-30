@@ -34,6 +34,8 @@ CLANG_LIBS := \
 	-lclangFormat \
 	-Wl,--end-group
 
+#	-lclangIndex \
+
 all: gencode
 
 gencode : gencode.cc
