@@ -1,4 +1,5 @@
 #include <string>
+#include <set>
 #include <iostream>
 #include "clang/AST/AST.h"
 #include "clang/AST/ASTConsumer.h"
@@ -14,6 +15,8 @@ using namespace clang;
 using namespace clang::driver;
 using namespace clang::tooling;
 using namespace std;
+
+static std::set<std::string> split(const char *str, char c = ' ');
 
 static llvm::cl::OptionCategory toolCategory("gencode options");
 
@@ -31,6 +34,12 @@ static llvm::cl::extrahelp MoreHelp(
 //static cl::opt<unsigned int> uiOpt ("u",  llvm::cl::desc("..."));
 static llvm::cl::opt<std::string>  stripPrefix ("strip",
         llvm::cl::desc("prefix to remove from names"));
+static llvm::cl::opt<bool>  useLong ("long",
+        llvm::cl::desc("use 64 bit integer"));
+static llvm::cl::opt<std::string>  excludeFuncs ("nowrap",
+        llvm::cl::desc("do not create wrapper for function (use : to seperate names)"));
+std::set<std::string> skipFuncs;
+
 //static llvm::cl::opt<std::string>  beginCode("start",
 //        llvm::cl::desc("code to add before starting output"));
 
@@ -49,6 +58,8 @@ enum class JsType {
     Void,
     Int,
     Uint,
+    Long,
+    Ulong,
     Double,
     String,     // char *
     VoidPtr,    // void *
@@ -75,16 +86,19 @@ static JsType ParseBuiltinType(const BuiltinType* bltIn) {
     case BuiltinType::Long:
         if (sizeof (long) == 4)
             return JsType::Int;
+        if (useLong)
+            return JsType::Long;
         return JsType::Double;
     case BuiltinType::ULong:
         if (sizeof (unsigned long) == 4)
-            return JsType::Uint; 
+            return JsType::Uint;
+        if (useLong)
+            return JsType::Ulong;
     case BuiltinType::LongLong:
     case BuiltinType::ULongLong:
     case BuiltinType::Float:
     case BuiltinType::Double:
         return JsType::Double;
-
     default: break;
     }
 
@@ -95,9 +109,8 @@ static JsType ParseType(QualType qType) {
 
     ASSERT(!qType.isNull() && "Expected non-null QualType");
     const Type* cType = qType.getTypePtr();
-    ASSERT(cType && "Expected a valid type");
 
-    switch(cType->getTypeClass()) {
+    switch(qType->getTypeClass()) {
     case Type::Builtin: {
         const BuiltinType *bltIn = cType->getAs<clang::BuiltinType>();
         return ParseBuiltinType(bltIn);
@@ -118,11 +131,9 @@ static JsType ParseType(QualType qType) {
             if (bltIn->getKind() == BuiltinType::SChar
                 || bltIn->getKind() == BuiltinType::Char_S
             ) {
-                //cout << "pointee is char\n";
                 return JsType::String;
             }
             else if (bltIn->getKind() == BuiltinType::Void) {
-                //cout << "pointee is void\n";
                 return JsType::VoidPtr;
             }
         } else if (pointeeType->getTypeClass() == Type::Pointer) {
@@ -175,6 +186,9 @@ struct CRecord {
     bool isanon;
     std::string offsets;
     CRecord(): recName(), typedefName(), size(0), isanon(false), offsets() {}
+    CRecord(const CRecord *cr1, const std::string &ts) : recName(cr1->recName),
+            typedefName(ts), size(cr1->size),
+            isanon(cr1->isanon), offsets(cr1->offsets) {}
 };
 
 // RecursiveASTVisitor does a pre-order depth-first traversal of the AST
@@ -195,15 +209,6 @@ public:
 
         if (decl->getKind() == Decl::Enum) {
             const EnumDecl *enumDecl = dyn_cast<EnumDecl>(decl);
-            /*
-             * Consider;
-             *  typedef enum foo foo_t;
-             *  enum foo { ... };
-             if (!enumDecl->isThisDeclarationADefinition())
-                return true;
-             */
-
-
 #if 0
             const std::string &fileName = m_sm.getFilename(fullLoc);
             cout << "enum " << fileName <<":"<<fullLoc.getSpellingLineNumber()<<"\n";
@@ -246,8 +251,22 @@ public:
                     if (findCRecordByTypedefName(typedefDecl->getNameAsString())) {
                         return true;
                     }
-                    // cannot be an anonymous record
+
+                    if (tagDecl->getNameAsString() == "") {
+                        // Anonymous record:
+                        //  typedef { .. } t1; typedef t1 t2;
+                        // FIXME -- definition need not be complete (seen yet).
+                        TypedefNameDecl *tD1 = tagDecl->getTypedefNameForAnonDecl();
+                        ASSERT(tD1);
+                        CRecord *cr1 = findCRecordByTypedefName(tD1->getNameAsString());
+                        ASSERT(cr1);
+                        m_records.push_back(
+                                new CRecord(cr1, typedefDecl->getNameAsString())
+                        );
+                        return true;
+                    }
                     CRecord *cr = getCRecord(tagDecl->getNameAsString());
+                    // FIXME -- multiple typedef names.
                     cr->typedefName = typedefDecl->getNameAsString();
                 }
             }
@@ -262,6 +281,10 @@ public:
                 cout << fileName <<":"<<fullLoc.getSpellingLineNumber()<<"\n";
 #endif
                 const std::string fName = funcDecl->getNameAsString();
+
+                if (skipFuncs.count(fName) > 0)
+                    return true;
+
                 MakeWrapStart(fName, funcDecl->getNumParams());
                 for (unsigned i = 0, j = funcDecl->getNumParams(); i != j; ++i) {
                     const ParmVarDecl *paramDecl = funcDecl->getParamDecl(i);
@@ -397,6 +420,14 @@ protected:
             fprintf(stdout, "unsigned int p%d = js_dl->to_uint(vm, %d, argv);\n",
                 paramNum, paramNum+1);
             break;
+        case JsType::Long:
+            fprintf(stdout, "int64_t p%d = js_dl->to_long(vm, %d, argv);\n",
+                paramNum, paramNum+1);
+            break;
+        case JsType::Ulong:
+            fprintf(stdout, "uint64_t p%d = js_dl->to_uint(vm, %d, argv);\n",
+                paramNum, paramNum+1);
+            break;
         case JsType::Double:
             fprintf(stdout, "double p%d = js_dl->to_double(vm, %d, argv);\n",
                 paramNum, paramNum+1);
@@ -432,6 +463,14 @@ protected:
         case JsType::Uint:
             fprintf(stdout, "unsigned int r = (unsigned int) %s(", fname);
             ends = "js_dl->from_uint(vm, r, argv);\n";
+            break;
+        case JsType::Long:
+            fprintf(stdout, "int64_t r = (int64_t) %s(", fname);
+            ends = "js_dl->from_long(vm, r, argv);\n";
+            break;
+        case JsType::Ulong:
+            fprintf(stdout, "uint64_t r = (uint64_t) %s(", fname);
+            ends = "js_dl->from_ulong(vm, r, argv);\n";
             break;
         case JsType::Double:
             fprintf(stdout, "double r = (double) %s(", fname);
@@ -679,7 +718,6 @@ public:
         fprintf(stdout, "JS_EXPORT(fntab_);\n}\n");
     }
 
-    // Create the ASTConsumer that will be used by this action.
     // The StringRef parameter is the current input filename.
     std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &ci,
                                 llvm::StringRef file) override {
@@ -703,12 +741,25 @@ private:
 };
 
 
+static std::set<std::string> split(const char *str, char c) {
+    std::set<std::string> s;
+    do {
+        const char *begin = str;
+        while (*str && *str != c)
+            str++;
+        s.insert(std::string(begin, str));
+    } while (*str++);
+    return s;
+}
+
 // N.B.: run with a trailing -- (./gencode filename --) to avoid seeing the
 // garbage spewed by clang.
 
 int main(int argc, const char **argv) {
     CommonOptionsParser op(argc, argv, toolCategory);
     ClangTool tool(op.getCompilations(), op.getSourcePathList());
+    if (excludeFuncs != "")
+        skipFuncs = split(excludeFuncs.c_str(), ':');
     return tool.run(newFrontendActionFactory<CFrontendAction>().get());
 }
 

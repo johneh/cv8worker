@@ -1361,196 +1361,6 @@ static void MakeCtypeProto(js_vm *vm) {
     vm->cptr_proto.Reset(isolate, ptr_proto);
 }
 
-////////////////////////////// DLL ///////////////////////////
-#define ARGV reinterpret_cast<Local<Value> *>(argv)[arg_num]
-#define ISOLATE(vm)   (vm->isolate)
-#define CURR_CONTEXT(vm)   ISOLATE(vm)->GetCurrentContext()
-#define CHECK_NUMBER(vm, v) \
-    Local<Value> v = ARGV; \
-    if (! v->IsNumber() && ! v->IsBoolean()) {\
-        js_set_errstr(vm, "C-type argument is not a number");\
-        return 0;\
-    }
-
-// N.B.: There is no type coercion in any of these JS to C
-// conversion routines.
-static int to_int(js_vm *vm, int arg_num, js_val argv) {
-    CHECK_NUMBER(vm, v)
-    return v->Int32Value(CURR_CONTEXT(vm)).FromJust();
-}
-
-static unsigned int to_uint(js_vm *vm, int arg_num, js_val argv) {
-    CHECK_NUMBER(vm, v)
-    return v->Uint32Value(CURR_CONTEXT(vm)).FromJust();
-}
-
-static double to_double(js_vm *vm, int arg_num, js_val argv) {
-    CHECK_NUMBER(vm, v)
-    return v->NumberValue(CURR_CONTEXT(vm)).FromJust();
-}
-
-static char *to_string(js_vm *vm, int arg_num, js_val argv) {
-    Local<Value> v = ARGV;
-    if (!v->IsString()) {
-        if (GetCtypeId(vm, v) == V8EXTPTR) {
-            return (char *) Local<External>::Cast(
-                    Local<Object>::Cast(v)->GetInternalField(1))->Value();
-        }
-        js_set_errstr(vm, "C-type argument is not a string");
-        return nullptr;
-    }
-    Local<String> s = v->ToString(CURR_CONTEXT(vm)).ToLocalChecked();
-    int utf8len = s->Utf8Length();	/* >= 0 */
-    char *p = (char *) emalloc(utf8len + 1);
-    int l = s->WriteUtf8(p, utf8len);
-    p[l] = '\0';
-    /* Keep track of memory so can free upon return; See CallForeignFunc() */
-    vm->dlstr[vm->dlstr_idx++] = p;
-    return p;
-}
-
-static void *to_pointer(js_vm *vm, int arg_num, js_val argv) {
-    Local<Value> v = ARGV;
-    if (GetCtypeId(vm, v) != V8EXTPTR) {
-        js_set_errstr(vm, "C-type argument is not a pointer");
-        return nullptr;
-    }
-    return Local<External>::Cast(
-                Local<Object>::Cast(v)->GetInternalField(1))->Value();
-}
-
-#define RETVAL reinterpret_cast<Local<Value> *>(argv)[0]
-
-static void from_int(js_vm *vm, int i, js_val argv) {
-    RETVAL = Integer::New(ISOLATE(vm), i);
-}
-
-static void from_uint(js_vm *vm, unsigned ui, js_val argv) {
-    RETVAL = Integer::NewFromUnsigned(ISOLATE(vm), ui);
-}
-
-static void from_double(js_vm *vm, double d, js_val argv) {
-    RETVAL = Number::New(ISOLATE(vm), d);
-}
-
-static void from_pointer(js_vm *vm, void *ptr, js_val argv) {
-    if (!ptr)
-        RETVAL = Local<Value>::New(ISOLATE(vm),
-                    vm->nullptr_handle->handle);
-    else
-        RETVAL = WrapPtr(vm, ptr);
-}
-
-static int call_str(js_vm *vm, const char *source, js_val argv) {
-    Isolate *isolate = vm->isolate;
-    HandleScope handle_scope(isolate);
-    Local<Context> context = isolate->GetCurrentContext();
-
-    // Must be a function expression.
-    js_handle *hr = CompileRun(vm, source);
-    if (!hr)
-        return false;
-    Local<Value> v1 = Local<Value>::New(isolate, hr->handle);
-    js_reset(hr);
-    if (!v1->IsFunction()) {
-        js_set_errstr(vm, "call_str: argument is not a function expression");
-        return false;
-    }
-    Local<Function> func = Local<Function>::Cast(v1);
-
-    TryCatch try_catch(isolate);
-    Local<Object> self = context->Global();
-    if (argv) {
-        self = reinterpret_cast<Local<Value> *>(argv)[0]
-                    -> ToObject(context).ToLocalChecked();
-    }
-    func->Call(context, self, 0, nullptr).FromMaybe(Local<Value>());
-    if (try_catch.HasCaught()) {
-        SetError(vm, &try_catch);
-        return false;
-    }
-    return true;
-}
-
-static struct js_dlfn_s dlfns = {
-    to_int,
-    to_uint,
-    to_double,
-    to_string,
-    to_pointer,
-    from_int,
-    from_uint,
-    from_double,
-    from_pointer,
-    call_str,
-    js_errstr
-};
-
-
-typedef int (*Fnload)(js_vm *, js_val, js_dlfn_s *, js_ffn **);
-
-// $load - load a dynamic library.
-// The filename must contain a slash. Any path search should be
-// done in the JS.
-
-static void Load(const FunctionCallbackInfo<Value>& args) {
-    Isolate *isolate = args.GetIsolate();
-    HandleScope handle_scope(isolate);
-    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
-
-    int argc = args.Length();
-    ThrowNotEnoughArgs(isolate, argc < 1);
-    Local<Context> context = isolate->GetCurrentContext();
-    String::Utf8Value path(args[0]);
-    if (!*path) {
-        ThrowError(isolate, "$load: path is empty string");
-    }
-    if (!strchr(*path, '/')) {
-        args.GetReturnValue().Set(v8::Null(isolate));
-        return;
-    }
-    dlerror();  /* Clear any existing error */
-    void *dl = dlopen(*path, RTLD_LAZY);
-    if (!dl) {
-        ThrowError(isolate, "$load: cannot dlopen library"); /* FIXME: use  dlerror() */
-    }
-
-    Fnload load_func = (Fnload) dlsym(dl, LOAD_FUNC);
-    if (!load_func) {
-        dlclose(dl);
-        ThrowError(isolate,
-            "$load: cannot find library initialization function");
-    }
-
-    js_ffn *functab;
-    Local<Object> o1 = Object::New(isolate);
-    Local<Value> argv[] = { o1 };
-    js_set_errstr(vm, nullptr);
-    int nfunc = load_func(vm, argv, &dlfns, &functab);
-    if (nfunc < 0) {
-        dlclose(dl);
-        ThrowError(isolate, vm->errstr ? vm->errstr : "unknown error");
-    }
-    for (int i = 0; i < nfunc; i++) {
-        if (!functab[i].name)
-            break;
-        functab[i].isdlfunc = 1;
-        Local<ObjectTemplate> templ =
-            Local<ObjectTemplate>::New(isolate, vm->extfunc_template);
-        Local<Object> fnObj = templ->NewInstance(context).ToLocalChecked();
-        fnObj->SetAlignedPointerInInternalField(0,
-             reinterpret_cast<void*>(static_cast<uintptr_t>(V8EXTFUNC<<2)));
-        fnObj->SetInternalField(1,
-                    External::New(isolate, (void *)&functab[i]));
-        fnObj->SetPrototype(Local<Value>::New(isolate, vm->ctype_proto));
-
-        o1->Set(context,
-                String::NewFromUtf8(isolate, functab[i].name),
-                fnObj).FromJust();
-    }
-    args.GetReturnValue().Set(o1);
-}
-
 ///////////////////////// 64 bit integers /////////////////////
 // FIXME: 64 bit platforms only. For 32 bit platforms, store low and high 32bits
 // in seperate internal fields.
@@ -1734,6 +1544,233 @@ static void ToLong(const v8::FunctionCallbackInfo<v8::Value>& args) {
         args.GetReturnValue().Set(UInt64(vm, ival.u64));
 }
 
+
+////////////////////////////// DLL ///////////////////////////
+#define ARGV reinterpret_cast<Local<Value> *>(argv)[arg_num]
+#define ISOLATE(vm)   (vm->isolate)
+#define CURR_CONTEXT(vm)   ISOLATE(vm)->GetCurrentContext()
+#define CHECK_NUMBER(vm, v) \
+    Local<Value> v = ARGV; \
+    if (! v->IsNumber() && ! v->IsBoolean()) {\
+        js_set_errstr(vm, "C-type argument is not a number");\
+        return 0;\
+    }
+
+// N.B.: There is no type coercion in any of these JS to C
+// conversion routines.
+static int to_int(js_vm *vm, int arg_num, js_val argv) {
+    CHECK_NUMBER(vm, v)
+    return v->Int32Value(CURR_CONTEXT(vm)).FromJust();
+}
+
+static unsigned int to_uint(js_vm *vm, int arg_num, js_val argv) {
+    CHECK_NUMBER(vm, v)
+    return v->Uint32Value(CURR_CONTEXT(vm)).FromJust();
+}
+
+static int64_t to_long(js_vm *vm, int arg_num, js_val argv) {
+    Local<Value> v = ARGV;
+    if (IsInt64(v))
+        return GetInt64(v);
+    if (! v->IsNumber() && ! v->IsBoolean()) {
+        js_set_errstr(vm, "C-type argument is not a number");
+        return 0;
+    }
+    return v->IntegerValue(CURR_CONTEXT(vm)).FromJust();
+}
+
+static uint64_t to_ulong(js_vm *vm, int arg_num, js_val argv) {
+    Local<Value> v = ARGV;
+    if (IsUInt64(v))
+        return GetUInt64(v);
+    if (! v->IsNumber() && ! v->IsBoolean()) {
+        js_set_errstr(vm, "C-type argument is not a number");
+        return 0;
+    }
+    double d = v->NumberValue(CURR_CONTEXT(vm)).FromJust();
+    if (isfinite(d))
+        return (uint64_t) d;
+    return 0;
+}
+
+static double to_double(js_vm *vm, int arg_num, js_val argv) {
+    CHECK_NUMBER(vm, v)
+    return v->NumberValue(CURR_CONTEXT(vm)).FromJust();
+}
+
+static char *to_string(js_vm *vm, int arg_num, js_val argv) {
+    Local<Value> v = ARGV;
+    if (!v->IsString()) {
+        if (GetCtypeId(vm, v) == V8EXTPTR) {
+            return (char *) Local<External>::Cast(
+                    Local<Object>::Cast(v)->GetInternalField(1))->Value();
+        }
+        js_set_errstr(vm, "C-type argument is not a string");
+        return nullptr;
+    }
+    Local<String> s = v->ToString(CURR_CONTEXT(vm)).ToLocalChecked();
+    int utf8len = s->Utf8Length();	/* >= 0 */
+    char *p = (char *) emalloc(utf8len + 1);
+    int l = s->WriteUtf8(p, utf8len);
+    p[l] = '\0';
+    /* Keep track of memory so can free upon return; See CallForeignFunc() */
+    vm->dlstr[vm->dlstr_idx++] = p;
+    return p;
+}
+
+static void *to_pointer(js_vm *vm, int arg_num, js_val argv) {
+    Local<Value> v = ARGV;
+    if (GetCtypeId(vm, v) != V8EXTPTR) {
+        js_set_errstr(vm, "C-type argument is not a pointer");
+        return nullptr;
+    }
+    return Local<External>::Cast(
+                Local<Object>::Cast(v)->GetInternalField(1))->Value();
+}
+
+#define RETVAL reinterpret_cast<Local<Value> *>(argv)[0]
+
+static void from_int(js_vm *vm, int i, js_val argv) {
+    RETVAL = Integer::New(ISOLATE(vm), i);
+}
+
+static void from_uint(js_vm *vm, unsigned ui, js_val argv) {
+    RETVAL = Integer::NewFromUnsigned(ISOLATE(vm), ui);
+}
+
+static void from_long(js_vm *vm, int64_t i, js_val argv) {
+    RETVAL = Int64(vm, i);
+}
+
+static void from_ulong(js_vm *vm, uint64_t ui, js_val argv) {
+    RETVAL = UInt64(vm, ui);
+}
+
+static void from_double(js_vm *vm, double d, js_val argv) {
+    RETVAL = Number::New(ISOLATE(vm), d);
+}
+
+static void from_pointer(js_vm *vm, void *ptr, js_val argv) {
+    if (!ptr)
+        RETVAL = Local<Value>::New(ISOLATE(vm),
+                    vm->nullptr_handle->handle);
+    else
+        RETVAL = WrapPtr(vm, ptr);
+}
+
+static int call_str(js_vm *vm, const char *source, js_val argv) {
+    Isolate *isolate = vm->isolate;
+    HandleScope handle_scope(isolate);
+    Local<Context> context = isolate->GetCurrentContext();
+
+    // Must be a function expression.
+    js_handle *hr = CompileRun(vm, source);
+    if (!hr)
+        return false;
+    Local<Value> v1 = Local<Value>::New(isolate, hr->handle);
+    js_reset(hr);
+    if (!v1->IsFunction()) {
+        js_set_errstr(vm, "call_str: argument is not a function expression");
+        return false;
+    }
+    Local<Function> func = Local<Function>::Cast(v1);
+
+    TryCatch try_catch(isolate);
+    Local<Object> self = context->Global();
+    if (argv) {
+        self = reinterpret_cast<Local<Value> *>(argv)[0]
+                    -> ToObject(context).ToLocalChecked();
+    }
+    func->Call(context, self, 0, nullptr).FromMaybe(Local<Value>());
+    if (try_catch.HasCaught()) {
+        SetError(vm, &try_catch);
+        return false;
+    }
+    return true;
+}
+
+static struct js_dlfn_s dlfns = {
+    to_int,
+    to_uint,
+    to_long,
+    to_ulong,
+    to_double,
+    to_string,
+    to_pointer,
+    from_int,
+    from_uint,
+    from_long,
+    from_ulong,
+    from_double,
+    from_pointer,
+    call_str,
+    js_errstr
+};
+
+
+typedef int (*Fnload)(js_vm *, js_val, js_dlfn_s *, js_ffn **);
+
+// $load - load a dynamic library.
+// The filename must contain a slash. Any path search should be
+// done in the JS.
+
+static void Load(const FunctionCallbackInfo<Value>& args) {
+    Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
+    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
+
+    int argc = args.Length();
+    ThrowNotEnoughArgs(isolate, argc < 1);
+    Local<Context> context = isolate->GetCurrentContext();
+    String::Utf8Value path(args[0]);
+    if (!*path) {
+        ThrowError(isolate, "$load: path is empty string");
+    }
+    if (!strchr(*path, '/')) {
+        args.GetReturnValue().Set(v8::Null(isolate));
+        return;
+    }
+    dlerror();  /* Clear any existing error */
+    void *dl = dlopen(*path, RTLD_LAZY);
+    if (!dl) {
+        ThrowError(isolate, "$load: cannot dlopen library"); /* FIXME: use  dlerror() */
+    }
+
+    Fnload load_func = (Fnload) dlsym(dl, LOAD_FUNC);
+    if (!load_func) {
+        dlclose(dl);
+        ThrowError(isolate,
+            "$load: cannot find library initialization function");
+    }
+
+    js_ffn *functab;
+    Local<Object> o1 = Object::New(isolate);
+    Local<Value> argv[] = { o1 };
+    js_set_errstr(vm, nullptr);
+    int nfunc = load_func(vm, argv, &dlfns, &functab);
+    if (nfunc < 0) {
+        dlclose(dl);
+        ThrowError(isolate, vm->errstr ? vm->errstr : "unknown error");
+    }
+    for (int i = 0; i < nfunc; i++) {
+        if (!functab[i].name)
+            break;
+        functab[i].isdlfunc = 1;
+        Local<ObjectTemplate> templ =
+            Local<ObjectTemplate>::New(isolate, vm->extfunc_template);
+        Local<Object> fnObj = templ->NewInstance(context).ToLocalChecked();
+        fnObj->SetAlignedPointerInInternalField(0,
+             reinterpret_cast<void*>(static_cast<uintptr_t>(V8EXTFUNC<<2)));
+        fnObj->SetInternalField(1,
+                    External::New(isolate, (void *)&functab[i]));
+        fnObj->SetPrototype(Local<Value>::New(isolate, vm->ctype_proto));
+
+        o1->Set(context,
+                String::NewFromUtf8(isolate, functab[i].name),
+                fnObj).FromJust();
+    }
+    args.GetReturnValue().Set(o1);
+}
 
 ///////////////////////////////////////////////////////////////
 
