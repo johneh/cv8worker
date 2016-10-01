@@ -95,4 +95,5 @@ do {\
 isolate->ThrowException(Exception::Error(\
     String::NewFromUtf8(isolate, (m))));\
 return; } while(0)
+
 #endif
