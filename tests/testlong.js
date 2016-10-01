@@ -1,29 +1,43 @@
-var i1 = $toLong("123456789");
-$print($formatLong(i1));
-var i2 = $toLong("123456789", true);
-$print($formatLong(i1, "s"));
+var i1, i2, i3;
+i1 = $long("123456789");
+$print($lcntl(i1));
+$print('issigned =', $lcntl(i1, $long.isInt64));
+$print('iszero =', $lcntl(i1, $long.isZero));
+i3 = $long(0, true);
+$print('issigned =', $lcntl(i3, $long.isInt64));
+$print('iszero =', $lcntl(i3, $long.isZero));
 
-i1 = $toLong("-123456789");
-$print($formatLong(i1, "s"));
-i2 = $toLong("-123456789", true);
-$print($formatLong(i1));
+i2 = $long("123456789", true);
+$print($lcntl(i1, $long.toString));
+$print('isequal =', $lcntl(i1, $long.eq, i2));
 
-i1 = $toLong("1234567890123");
-var low = $formatLong(i1, 'l');
-var high = $formatLong(i1, 'h');
-i2 = $toLong([low, high]);
-$print($formatLong(i1), $formatLong(i2));
+i1 = $long("-123456789");
+$print($lcntl(i1));
+i2 = $long("-123456789", true);
+$print($lcntl(i2));
 
-i1 = $toLong("143141355151351515616565165161613");
-$print($formatLong(i1));	// == "0"
+i1 = $long("1234567890123");
+var low = $lcntl(i1, $long.low32);
+var high = $lcntl(i1, $long.high32);
+i2 = $long([low, high]);
+$print($lcntl(i1), $lcntl(i2));
 
-$print($formatLong($toLong([0, 0])),
-		$formatLong($toLong([1, 0])),
-		$formatLong($toLong({}))	// == 0
+i1 = $long("143141355151351515616565165161613");
+$print($lcntl(i1));	// == "0"
+
+$print($lcntl($long([0, 0])),
+		$lcntl($long([1, 0])),
+		$lcntl($long({}))	// == 0
 );
-$print($formatLong($toLong([-1, -1], true)));	// UINT64_MAX
-$print($formatLong($toLong([-1, ~(1 << 31)])));  // INT64_MAX
-$print($formatLong($toLong([0, (1 << 31)])));   // INT64_MIN
 
-$print($formatLong($toLong(1.0/0/0)),
-		$formatLong($toLong(0.0/0.0)));
+$print($lcntl($long([-1, -1], true)));	// UINT64_MAX
+$print($lcntl($long([-1, ~(1 << 31)])));  // INT64_MAX
+$print($lcntl($long([0, (1 << 31)])));   // INT64_MIN
+
+i1 = $long("-1");
+i2 = $long([$lcntl(i1, $long.low32), $lcntl(i1, $long.high32)], true);
+$print($lcntl(i1), $lcntl(i2));
+$print('isequal =', $lcntl(i1, $long.eq, i2));
+
+$print($lcntl($long(1.0/0.0)),
+		$lcntl($long(0.0/0.0)));

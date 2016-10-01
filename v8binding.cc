@@ -14,6 +14,7 @@
 #include "v8binding.h"
 #include "vm.h"
 #include "util.h"
+#include "long.h"
 
 using namespace v8;
 
@@ -1361,190 +1362,6 @@ static void MakeCtypeProto(js_vm *vm) {
     vm->cptr_proto.Reset(isolate, ptr_proto);
 }
 
-///////////////////////// 64 bit integers /////////////////////
-// FIXME: 64 bit platforms only. For 32 bit platforms, store low and high 32bits
-// in seperate internal fields.
-
-static Local<Object> Int64(js_vm *vm, int64_t i64) {
-    Isolate *isolate = vm->isolate;
-    EscapableHandleScope handle_scope(isolate);
-    Local<ObjectTemplate> templ =
-        Local<ObjectTemplate>::New(isolate, vm->i64_template);
-    Local<Object> obj = templ->NewInstance(
-                    isolate->GetCurrentContext()).ToLocalChecked();
-    obj->SetAlignedPointerInInternalField(0,
-            reinterpret_cast<void*>(static_cast<uintptr_t>(V8INT64<<2)));
-    obj->SetInternalField(1, External::New(isolate,
-            reinterpret_cast<void*>(static_cast<intptr_t>(i64))));
-    return handle_scope.Escape(obj);
-}
-
-static Local<Object> UInt64(js_vm *vm, uint64_t ui64) {
-    Isolate *isolate = vm->isolate;
-    EscapableHandleScope handle_scope(isolate);
-    Local<ObjectTemplate> templ =
-        Local<ObjectTemplate>::New(isolate, vm->ui64_template);
-    Local<Object> obj = templ->NewInstance(
-                    isolate->GetCurrentContext()).ToLocalChecked();
-    obj->SetAlignedPointerInInternalField(0,
-             reinterpret_cast<void*>(static_cast<uintptr_t>(V8UINT64<<2)));
-    obj->SetInternalField(1, External::New(isolate,
-            reinterpret_cast<void*>(static_cast<uintptr_t>(ui64))));
-    return handle_scope.Escape(obj);
-}
-
-static int IsInt64(Local<Value> v) {
-    if (v->IsObject()
-        && Local<Object>::Cast(v)->InternalFieldCount() == 2
-        && (V8INT64 == static_cast<int>(reinterpret_cast<uintptr_t>(
-                Local<Object>::Cast(v)->GetAlignedPointerFromInternalField(0)) >> 2))
-    )
-        return true;
-    return false;
-}
-
-static int64_t GetInt64(Local<Value> v) {
-    return static_cast<int64_t>(
-            reinterpret_cast<intptr_t>(Local<External>::Cast(
-                    Local<Object>::Cast(v)->GetInternalField(1))->Value()
-            )
-    );
-}
-
-static int IsUInt64(Local<Value> v) {
-    if (v->IsObject()
-        && Local<Object>::Cast(v)->InternalFieldCount() == 2
-        && (V8UINT64 == static_cast<int>(reinterpret_cast<uintptr_t>(
-                Local<Object>::Cast(v)->GetAlignedPointerFromInternalField(0)) >> 2))
-    )
-        return true;
-    return false;
-}
-
-static uint64_t GetUInt64(Local<Value> v) {
-    return static_cast<uint64_t>(
-            reinterpret_cast<uintptr_t>(Local<External>::Cast(
-                Local<Object>::Cast(v)->GetInternalField(1))->Value()
-            )
-    );
-}
-
-union integer64_u {
-    int64_t i64;
-    uint64_t u64;
-#if __BYTE_ORDER == __BIG_ENDIAN
-    struct { int32_t high; int32_t low; };
-    struct { uint32_t uhigh; uint32_t ulow; };
-#else
-    struct { int32_t low; int32_t high; };
-    struct { uint32_t ulow; uint32_t uhigh; };
-#endif
-};
-
-//$formatLong(Int64/UInt64, 's|f|l (low 32 signed)|h|ul (low 32 signed)|uh)
-static void FormatLong(const v8::FunctionCallbackInfo<v8::Value>& args) {
-    int argc = args.Length();
-    Isolate *isolate = args.GetIsolate();
-    HandleScope handle_scope(isolate);
-    ThrowNotEnoughArgs(isolate, argc < 1);
-    union integer64_u ival;
-    bool issigned = false;
-    if (IsInt64(args[0])) {
-        issigned = true;
-        ival.i64 = GetInt64(args[0]);
-    } else if (IsUInt64(args[0])) {
-        ival.u64 = GetUInt64(args[0]);
-    } else
-        ThrowTypeError(isolate, "$formatLong: not a 64-bit integer");
-    char fmtstr[2] = {'s', '\0'};
-    if (argc > 1) {
-        Local<String> s = args[1]->ToString(
-                        isolate->GetCurrentContext()).ToLocalChecked();
-        String::Utf8Value stval(s);
-        if (!*stval)
-            fmtstr[0] = '\0';
-        else {
-            fmtstr[0] = (*stval)[0];
-            if (stval.length() > 1)
-                fmtstr[1] = (*stval)[1];
-        }
-    }
-
-    if (fmtstr[0] == 's') {
-        char buf[32];
-        if (issigned)
-            sprintf(buf, "%" PRId64, ival.i64);
-        else
-            sprintf(buf, "%" PRIu64, ival.u64);
-        args.GetReturnValue().Set(String::NewFromUtf8(isolate, buf));
-    } else if (fmtstr[0] == 'l') {
-        args.GetReturnValue().Set(Integer::New(isolate, ival.low));
-    } else if (fmtstr[0] == 'h') {
-        args.GetReturnValue().Set(Integer::New(isolate, ival.high));
-    } else if (fmtstr[0] == 'u' && fmtstr[1] == 'l') {
-        args.GetReturnValue().Set(
-                        Integer::NewFromUnsigned(isolate, ival.ulow));
-    } else if (fmtstr[0] == 'u' && fmtstr[1] == 'h') {
-        args.GetReturnValue().Set(
-                        Integer::NewFromUnsigned(isolate, ival.uhigh));
-    } else
-        ThrowError(isolate, "$formatLong: format argument is invalid");
-}
-
-
-// $toLong("string")
-// $toLong(number)
-// $toLong([signed 32-bit low, high])
-static void ToLong(const v8::FunctionCallbackInfo<v8::Value>& args) {
-    int argc = args.Length();
-    Isolate *isolate = args.GetIsolate();
-    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
-    HandleScope handle_scope(isolate);
-    ThrowNotEnoughArgs(isolate, argc < 1);
-    Local <Context> context = isolate->GetCurrentContext();
-    bool issigned = true;
-    if (argc > 1)
-        issigned = !args[1]->BooleanValue(context).FromJust();
-
-    union integer64_u ival;
-    ival.low = ival.high = 0;
-    if (args[0]->IsObject()) {  // likely array
-        Local <Object> obj = Local<Object>::Cast(args[0]);
-        ival.low = obj->Get(context, 0).ToLocalChecked()
-                        ->Int32Value(context).FromJust();
-        ival.high = obj->Get(context, 1).ToLocalChecked()
-                        ->Int32Value(context).FromJust();
-    } else if (args[0]->IsNumber()) {
-        double d = args[0]->NumberValue(context).FromJust();
-        if (isfinite(d)) {
-            if (issigned)
-                ival.i64 = d;
-            else
-                ival.u64 = d;
-        }
-    } else {
-        Local<String> s = args[0]->ToString(context).ToLocalChecked();
-        String::Utf8Value stval(s);
-        if (*stval) {
-            errno = 0;
-            if (issigned) {
-                ival.i64 = (int64_t) strtoll(*stval, nullptr, 0);
-                if (errno != 0)
-                    ival.i64 = 0;
-            } else {
-                ival.u64 = (uint64_t) strtoull(*stval, nullptr, 0);
-                if (errno != 0)
-                    ival.u64 = 0;
-            }
-        }
-    }
-    if (issigned)
-        args.GetReturnValue().Set(Int64(vm, ival.i64));
-    else
-        args.GetReturnValue().Set(UInt64(vm, ival.u64));
-}
-
-
 ////////////////////////////// DLL ///////////////////////////
 #define ARGV reinterpret_cast<Local<Value> *>(argv)[arg_num]
 #define ISOLATE(vm)   (vm->isolate)
@@ -1817,10 +1634,10 @@ static void CreateIsolate(js_vm *vm) {
                 FunctionTemplate::New(isolate, Malloc));
     global->Set(String::NewFromUtf8(isolate, "$load"),
                 FunctionTemplate::New(isolate, Load));
-    global->Set(String::NewFromUtf8(isolate, "$formatLong"),
-                FunctionTemplate::New(isolate, FormatLong));
-    global->Set(String::NewFromUtf8(isolate, "$toLong"),
-                FunctionTemplate::New(isolate, ToLong));
+    global->Set(String::NewFromUtf8(isolate, "$lcntl"),
+                FunctionTemplate::New(isolate, LongCntl));
+    global->Set(String::NewFromUtf8(isolate, "$long"),
+                    LongTemplate(vm));
 
     Local<Context> context = Context::New(isolate, NULL, global);
     if (context.IsEmpty()) {
@@ -1887,6 +1704,7 @@ static void CreateIsolate(js_vm *vm) {
     realGlobal->SetAccessor(context,
             String::NewFromUtf8(isolate, "$errno"),
             GlobalGet, GlobalSet).FromJust();
+
     vm->global_handle = make_handle(vm, realGlobal, V8OBJECT);
     vm->global_handle->flags |= PERM_HANDLE;
 }
