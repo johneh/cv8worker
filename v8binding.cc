@@ -174,7 +174,7 @@ static void Go(const FunctionCallbackInfo<Value>& args) {
     int argc = args.Length();
     ThrowNotEnoughArgs(isolate, argc < 3);
     vm = static_cast<js_vm*>(isolate->GetData(0));
-    fn = (Fncoro) ExternalPtrValue(vm, args[0]);
+    fn = reinterpret_cast<Fncoro>(ExternalPtrValue(vm, args[0]));
     if (!fn)
         ThrowTypeError(isolate, "$go argument #1: coroutine expected");
     if (!args[2]->IsFunction())
@@ -308,23 +308,6 @@ static void EvalString(const FunctionCallbackInfo<Value>& args) {
     }
     assert(!result.IsEmpty());
     args.GetReturnValue().Set(result);
-}
-
-static Local<Object> WrapPtr(js_vm *vm, void *ptr) {
-    Isolate *isolate = vm->isolate;
-    assert(Locker::IsLocked(isolate));
-    // Local scope for temporary handles.
-    EscapableHandleScope handle_scope(isolate);
-    Local<ObjectTemplate> templ =
-        Local<ObjectTemplate>::New(isolate, vm->extptr_template);
-    Local<Object> obj = templ->NewInstance(
-                    isolate->GetCurrentContext()).ToLocalChecked();
-    int oid = (V8EXTPTR<<2);
-    obj->SetAlignedPointerInInternalField(0,
-             reinterpret_cast<void*>(static_cast<uintptr_t>(oid)));
-    obj->SetInternalField(1, External::New(isolate, ptr));
-    obj->SetPrototype(Local<Value>::New(isolate, vm->cptr_proto));
-    return handle_scope.Escape(obj);
 }
 
 // malloc(size [, zerofill])
@@ -474,7 +457,7 @@ coroutine static void start_coro(mill_pipe p) {
         if (done)
             break;
         assert(cr->coro);
-        Fncoro co = (Fncoro) cr->coro;
+        Fncoro co = reinterpret_cast<Fncoro>(cr->coro);
         go(co(cr->vm, cr, cr->inval));
     }
 }
@@ -660,10 +643,8 @@ static js_handle *CompileRun(js_vm *vm, const char *src) {
 
     TryCatch try_catch(isolate);
     const char *script_name = "<string>";   // TODO: optional argument
-    Local<String> name(String::NewFromUtf8(isolate, script_name,
-                NewStringType::kNormal).ToLocalChecked());
-    Local<String> source(String::NewFromUtf8(isolate, src,
-                NewStringType::kNormal).ToLocalChecked());
+    Local<String> name(v8_str(isolate, script_name));
+    Local<String> source(v8_str(isolate, src));
 
     ScriptOrigin origin(name);
     Local<Script> script;
@@ -736,7 +717,7 @@ js_handle *js_get(js_handle *hobj, const char *key) {
     Local<Object> obj = Local<Object>::Cast(v1);
     /* undefined for non-existent key */
     Local<Value> v2 = obj->Get(context,
-                String::NewFromUtf8(isolate, key)).ToLocalChecked();
+                v8_str(isolate, key)).ToLocalChecked();
     return make_handle(vm, v2, V8UNKNOWN);
 }
 
@@ -750,7 +731,7 @@ int js_set(js_handle *hobj, const char *key, js_handle *hval) {
         return 0;
     }
     Local<Object> obj = Local<Object>::Cast(v1);
-    return obj->Set(context, String::NewFromUtf8(isolate, key),
+    return obj->Set(context, v8_str(isolate, key),
                 Local<Value>::New(isolate, hval->handle)).FromJust();
 }
 
@@ -764,8 +745,7 @@ int js_set_string(js_handle *hobj,
         return 0;
     }
     Local<Object> obj = Local<Object>::Cast(v1);
-    return obj->Set(String::NewFromUtf8(isolate, name),
-                        String::NewFromUtf8(isolate, val));
+    return obj->Set(v8_str(isolate, name), v8_str(isolate, val));
 }
 
 js_handle *js_array(js_vm *vm, int length) {
@@ -889,7 +869,7 @@ js_handle *js_error(js_vm *vm, const char *message) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate)
     return make_handle(vm, Exception::Error(
-                    String::NewFromUtf8(isolate, message)), V8ERROR);
+                    v8_str(isolate, message)), V8ERROR);
 }
 
 js_handle *js_pointer(js_vm *vm, void *ptr) {
@@ -1492,28 +1472,27 @@ static void CreateIsolate(js_vm *vm) {
     isolate->SetData(0, vm);
 
     Local<ObjectTemplate> global = ObjectTemplate::New(isolate);
-    global->Set(String::NewFromUtf8(isolate, "$print"),
+    global->Set(v8_str(isolate, "$print"),
                 FunctionTemplate::New(isolate, Print));
-    global->Set(String::NewFromUtf8(isolate, "$go"),
+    global->Set(v8_str(isolate, "$go"),
                 FunctionTemplate::New(isolate, Go));
-    global->Set(String::NewFromUtf8(isolate, "$msleep"),
+    global->Set(v8_str(isolate, "$msleep"),
                 FunctionTemplate::New(isolate, MSleep));
-    global->Set(String::NewFromUtf8(isolate, "$now"),
+    global->Set(v8_str(isolate, "$now"),
                 FunctionTemplate::New(isolate, Now));
-    global->Set(String::NewFromUtf8(isolate, "$send"),
+    global->Set(v8_str(isolate, "$send"),
                 FunctionTemplate::New(isolate, Send));
-    global->Set(String::NewFromUtf8(isolate, "$close"),
+    global->Set(v8_str(isolate, "$close"),
                 FunctionTemplate::New(isolate, Close));
-    global->Set(String::NewFromUtf8(isolate, "$eval"),
+    global->Set(v8_str(isolate, "$eval"),
                 FunctionTemplate::New(isolate, EvalString));
-    global->Set(String::NewFromUtf8(isolate, "$malloc"),
+    global->Set(v8_str(isolate, "$malloc"),
                 FunctionTemplate::New(isolate, Malloc));
-    global->Set(String::NewFromUtf8(isolate, "$load"),
+    global->Set(v8_str(isolate, "$load"),
                 FunctionTemplate::New(isolate, Load));
-    global->Set(String::NewFromUtf8(isolate, "$lcntl"),
+    global->Set(v8_str(isolate, "$lcntl"),
                 FunctionTemplate::New(isolate, LongCntl));
-    global->Set(String::NewFromUtf8(isolate, "$long"),
-                    LongTemplate(vm));
+    global->Set(v8_str(isolate, "$long"), LongTemplate(vm));
 
     Local<Context> context = Context::New(isolate, NULL, global);
     if (context.IsEmpty()) {
@@ -1575,11 +1554,10 @@ static void CreateIsolate(js_vm *vm) {
     // Name the global object "Global".
     Local<Object> realGlobal = Local<Object>::Cast(
                         context->Global()->GetPrototype());
-    realGlobal->Set(String::NewFromUtf8(isolate, "Global"), realGlobal);
-    realGlobal->Set(String::NewFromUtf8(isolate, "$nullptr"), nullptr_obj);
-    realGlobal->SetAccessor(context,
-            String::NewFromUtf8(isolate, "$errno"),
-            GlobalGet, GlobalSet).FromJust();
+    realGlobal->Set(v8_str(isolate, "Global"), realGlobal);
+    realGlobal->Set(v8_str(isolate, "$nullptr"), nullptr_obj);
+    realGlobal->SetAccessor(context, v8_str(isolate, "$errno"),
+                    GlobalGet, GlobalSet).FromJust();
 
     vm->global_handle = make_handle(vm, realGlobal, V8OBJECT);
     vm->global_handle->flags |= PERM_HANDLE;

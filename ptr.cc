@@ -52,9 +52,9 @@ static void Ctype(const FunctionCallbackInfo<Value>& args) {
     assert(args.Holder() == args.This()); // N.B.: not true in accessor callback.!
     int id = GetCtypeId(vm, obj);
     if (id == V8EXTPTR)
-        args.GetReturnValue().Set(String::NewFromUtf8(isolate, "C-pointer"));
+        args.GetReturnValue().Set(v8_str(isolate, "C-pointer"));
     else if (id == V8EXTFUNC)
-        args.GetReturnValue().Set(String::NewFromUtf8(isolate, "C-function"));
+        args.GetReturnValue().Set(v8_str(isolate, "C-function"));
 }
 
 #if 0
@@ -157,12 +157,28 @@ static void Utf8String(const FunctionCallbackInfo<Value>& args) {
                 (char *) ptr, v8::String::kNormalString, length));
 }
 
+Local<Object> WrapPtr(js_vm *vm, void *ptr) {
+    Isolate *isolate = vm->isolate;
+    assert(Locker::IsLocked(isolate));
+    EscapableHandleScope handle_scope(isolate);
+    Local<ObjectTemplate> templ =
+        Local<ObjectTemplate>::New(isolate, vm->extptr_template);
+    Local<Object> obj = templ->NewInstance(
+                    isolate->GetCurrentContext()).ToLocalChecked();
+    int oid = (V8EXTPTR<<2);
+    obj->SetAlignedPointerInInternalField(0,
+             reinterpret_cast<void*>(static_cast<uintptr_t>(oid)));
+    obj->SetInternalField(1, External::New(isolate, ptr));
+    obj->SetPrototype(Local<Value>::New(isolate, vm->cptr_proto));
+    return handle_scope.Escape(obj);
+}
+
 // Construct the prototype object for C pointers and functions.
 void MakeCtypeProto(js_vm *vm) {
     Isolate *isolate = vm->isolate;
     HandleScope handle_scope(isolate);
     Local<ObjectTemplate> cp_templ = ObjectTemplate::New(isolate);
-    cp_templ->Set(String::NewFromUtf8(isolate, "ctype"),
+    cp_templ->Set(v8_str(isolate, "ctype"),
                 FunctionTemplate::New(isolate, Ctype));
     vm->ctype_proto.Reset(isolate, cp_templ->NewInstance(
                     isolate->GetCurrentContext()).ToLocalChecked());
@@ -171,13 +187,13 @@ void MakeCtypeProto(js_vm *vm) {
     //  cptr_object.__proto__ = ptr_proto;
     //  ptr_proto.__proto__ = vm->ctype_proto;
     Local<ObjectTemplate> ptr_templ = ObjectTemplate::New(isolate);
-    ptr_templ->Set(String::NewFromUtf8(isolate, "dispose"),
+    ptr_templ->Set(v8_str(isolate, "dispose"),
                 FunctionTemplate::New(isolate, Dispose));
-    ptr_templ->Set(String::NewFromUtf8(isolate, "free"),
+    ptr_templ->Set(v8_str(isolate, "free"),
                 FunctionTemplate::New(isolate, Free));
-    ptr_templ->Set(String::NewFromUtf8(isolate, "notNull"),
+    ptr_templ->Set(v8_str(isolate, "notNull"),
                 FunctionTemplate::New(isolate, NotNull));
-    ptr_templ->Set(String::NewFromUtf8(isolate, "utf8String"),
+    ptr_templ->Set(v8_str(isolate, "utf8String"),
                 FunctionTemplate::New(isolate, Utf8String));
 
     // Create the one and only proto instance.

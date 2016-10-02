@@ -96,4 +96,10 @@ isolate->ThrowException(Exception::Error(\
     String::NewFromUtf8(isolate, (m))));\
 return; } while(0)
 
+static inline v8::Local<v8::String> v8_str(v8::Isolate* isolate,
+            const char* x) {
+  return v8::String::NewFromUtf8(isolate, x, v8::NewStringType::kNormal)
+      .ToLocalChecked();
+}
+
 #endif
