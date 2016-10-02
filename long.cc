@@ -49,7 +49,7 @@ Local<Object> UInt64(js_vm *vm, uint64_t ui64) {
     return handle_scope.Escape(obj);
 }
 
-int IsInt64(Local<Value> v) {
+bool IsInt64(Local<Value> v) {
     if (v->IsObject()
         && Local<Object>::Cast(v)->InternalFieldCount() == 2
         && (V8INT64 == static_cast<int>(reinterpret_cast<uintptr_t>(
@@ -67,7 +67,7 @@ int64_t GetInt64(Local<Value> v) {
     );
 }
 
-int IsUInt64(Local<Value> v) {
+bool IsUInt64(Local<Value> v) {
     if (v->IsObject()
         && Local<Object>::Cast(v)->InternalFieldCount() == 2
         && (V8UINT64 == static_cast<int>(reinterpret_cast<uintptr_t>(
@@ -85,22 +85,36 @@ uint64_t GetUInt64(Local<Value> v) {
     );
 }
 
-union integer64_u {
-    int64_t i64;
-    uint64_t u64;
-#if __BYTE_ORDER == __BIG_ENDIAN
-    struct { int32_t high; int32_t low; };
-    struct { uint32_t uhigh; uint32_t ulow; };
-#else
-    struct { int32_t low; int32_t high; };
-    struct { uint32_t ulow; uint32_t uhigh; };
-#endif
-};
+int LongValue(Local<Value> v, Long64 *val) {
+    if (v->IsObject()
+            && Local<Object>::Cast(v)->InternalFieldCount() == 2) {
+        int id = static_cast<int>(reinterpret_cast<uintptr_t>(
+                Local<Object>::Cast(v)->GetAlignedPointerFromInternalField(0)) >> 2);
+        if (id == V8INT64) {
+            val->i64 = static_cast<int64_t>(
+                reinterpret_cast<intptr_t>(Local<External>::Cast(
+                    Local<Object>::Cast(v)->GetInternalField(1))->Value()
+                )
+            );
+            return V8INT64;
+        }
+        if (id == V8UINT64) {
+            val->u64 = static_cast<uint64_t>(
+                reinterpret_cast<uintptr_t>(Local<External>::Cast(
+                    Local<Object>::Cast(v)->GetInternalField(1))->Value()
+                )
+            );
+            return V8UINT64;
+        }
+    }
+    return 0;
+}
 
 enum LongCmd {
     LONG_ISINT = 1,
     LONG_ISUINT,
     LONG_TOSTRING,
+    LONG_TONUMBER,
     LONG_LOW32,
     LONG_HIGH32,
     LONG_LOW32U,
@@ -116,6 +130,7 @@ static struct lcmd_s {
     { (char *) "isInt64", LONG_ISINT },
     { (char *) "isUint64", LONG_ISUINT },
     { (char *) "toString", LONG_TOSTRING },
+    { (char *) "toNumber", LONG_TONUMBER },
     { (char *) "low32", LONG_LOW32 },
     { (char *) "high32", LONG_HIGH32 },
     { (char *) "low32u", LONG_LOW32U },
@@ -125,7 +140,7 @@ static struct lcmd_s {
     {0}
 };
 
-//$lcntl(Int64/UInt64, 'i|u|s|l (low 32 signed)|h|L (low 32 unsigned)|H)
+//$lcntl(Int64/UInt64, LongCmd)
 void LongCntl(const v8::FunctionCallbackInfo<v8::Value>& args) {
     int argc = args.Length();
     Isolate *isolate = args.GetIsolate();
@@ -166,6 +181,11 @@ void LongCntl(const v8::FunctionCallbackInfo<v8::Value>& args) {
         else
             sprintf(buf, "%" PRIu64, ival.u64);
         args.GetReturnValue().Set(String::NewFromUtf8(isolate, buf));
+    }
+        break;
+    case LONG_TONUMBER: {
+        double d = issigned ? (double)ival.i64 : (double)ival.u64;
+        args.GetReturnValue().Set(Number::New(isolate, d));
     }
         break;
     case LONG_LOW32:

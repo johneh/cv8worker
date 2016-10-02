@@ -32,7 +32,8 @@ $print($lcntl($long([0, 0])),
 
 $print($lcntl($long([-1, -1], true)));	// UINT64_MAX
 $print($lcntl($long([-1, ~(1 << 31)])));  // INT64_MAX
-$print($lcntl($long([0, (1 << 31)])));   // INT64_MIN
+i1 = $long([0, (1 << 31)]); // INT64_MIN
+$print($lcntl(i1), $lcntl(i1, $long.toNumber));
 
 i1 = $long("-1");
 i2 = $long([$lcntl(i1, $long.low32), $lcntl(i1, $long.high32)], true);
