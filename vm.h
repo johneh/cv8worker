@@ -102,4 +102,18 @@ static inline v8::Local<v8::String> v8_str(v8::Isolate* isolate,
       .ToLocalChecked();
 }
 
+#define v8Value Local<Value>
+#define v8String Local<String>
+#define v8Object Local<Object>
+#define v8Context Local<Context>
+#define v8Function Local<Function>
+#define v8ObjectTemplate Local<ObjectTemplate>
+#define v8External Local<External>
+#define v8Name Local<Name>
+#define v8Script Local<Script>
+#define v8Message Local<Message>
+#define v8ArrayBufferView Local<ArrayBufferView>
+#define v8ArrayBuffer Local<ArrayBuffer>
+#define v8TypedArray Local<TypedArray>
+
 #endif

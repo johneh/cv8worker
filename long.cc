@@ -21,12 +21,12 @@ using namespace v8;
 
 extern "C" {
 
-Local<Object> Int64(js_vm *vm, int64_t i64) {
+v8Object Int64(js_vm *vm, int64_t i64) {
     Isolate *isolate = vm->isolate;
     EscapableHandleScope handle_scope(isolate);
-    Local<ObjectTemplate> templ =
-        Local<ObjectTemplate>::New(isolate, vm->i64_template);
-    Local<Object> obj = templ->NewInstance(
+    v8ObjectTemplate templ =
+        v8ObjectTemplate::New(isolate, vm->i64_template);
+    v8Object obj = templ->NewInstance(
                     isolate->GetCurrentContext()).ToLocalChecked();
     obj->SetAlignedPointerInInternalField(0,
             reinterpret_cast<void*>(static_cast<uintptr_t>(V8INT64<<2)));
@@ -35,12 +35,12 @@ Local<Object> Int64(js_vm *vm, int64_t i64) {
     return handle_scope.Escape(obj);
 }
 
-Local<Object> UInt64(js_vm *vm, uint64_t ui64) {
+v8Object UInt64(js_vm *vm, uint64_t ui64) {
     Isolate *isolate = vm->isolate;
     EscapableHandleScope handle_scope(isolate);
-    Local<ObjectTemplate> templ =
-        Local<ObjectTemplate>::New(isolate, vm->ui64_template);
-    Local<Object> obj = templ->NewInstance(
+    v8ObjectTemplate templ =
+        v8ObjectTemplate::New(isolate, vm->ui64_template);
+    v8Object obj = templ->NewInstance(
                     isolate->GetCurrentContext()).ToLocalChecked();
     obj->SetAlignedPointerInInternalField(0,
              reinterpret_cast<void*>(static_cast<uintptr_t>(V8UINT64<<2)));
@@ -49,59 +49,59 @@ Local<Object> UInt64(js_vm *vm, uint64_t ui64) {
     return handle_scope.Escape(obj);
 }
 
-bool IsInt64(Local<Value> v) {
+bool IsInt64(v8Value v) {
     if (v->IsObject()
-        && Local<Object>::Cast(v)->InternalFieldCount() == 2
+        && v8Object::Cast(v)->InternalFieldCount() == 2
         && (V8INT64 == static_cast<int>(reinterpret_cast<uintptr_t>(
-                Local<Object>::Cast(v)->GetAlignedPointerFromInternalField(0)) >> 2))
+                v8Object::Cast(v)->GetAlignedPointerFromInternalField(0)) >> 2))
     )
         return true;
     return false;
 }
 
-int64_t GetInt64(Local<Value> v) {
+int64_t GetInt64(v8Value v) {
     return static_cast<int64_t>(
-            reinterpret_cast<intptr_t>(Local<External>::Cast(
-                    Local<Object>::Cast(v)->GetInternalField(1))->Value()
+            reinterpret_cast<intptr_t>(v8External::Cast(
+                    v8Object::Cast(v)->GetInternalField(1))->Value()
             )
     );
 }
 
-bool IsUInt64(Local<Value> v) {
+bool IsUInt64(v8Value v) {
     if (v->IsObject()
-        && Local<Object>::Cast(v)->InternalFieldCount() == 2
+        && v8Object::Cast(v)->InternalFieldCount() == 2
         && (V8UINT64 == static_cast<int>(reinterpret_cast<uintptr_t>(
-                Local<Object>::Cast(v)->GetAlignedPointerFromInternalField(0)) >> 2))
+                v8Object::Cast(v)->GetAlignedPointerFromInternalField(0)) >> 2))
     )
         return true;
     return false;
 }
 
-uint64_t GetUInt64(Local<Value> v) {
+uint64_t GetUInt64(v8Value v) {
     return static_cast<uint64_t>(
-            reinterpret_cast<uintptr_t>(Local<External>::Cast(
-                Local<Object>::Cast(v)->GetInternalField(1))->Value()
+            reinterpret_cast<uintptr_t>(v8External::Cast(
+                v8Object::Cast(v)->GetInternalField(1))->Value()
             )
     );
 }
 
-int LongValue(Local<Value> v, Long64 *val) {
+int LongValue(v8Value v, Long64 *val) {
     if (v->IsObject()
-            && Local<Object>::Cast(v)->InternalFieldCount() == 2) {
+            && v8Object::Cast(v)->InternalFieldCount() == 2) {
         int id = static_cast<int>(reinterpret_cast<uintptr_t>(
-                Local<Object>::Cast(v)->GetAlignedPointerFromInternalField(0)) >> 2);
+                v8Object::Cast(v)->GetAlignedPointerFromInternalField(0)) >> 2);
         if (id == V8INT64) {
             val->i64 = static_cast<int64_t>(
-                reinterpret_cast<intptr_t>(Local<External>::Cast(
-                    Local<Object>::Cast(v)->GetInternalField(1))->Value()
+                reinterpret_cast<intptr_t>(v8External::Cast(
+                    v8Object::Cast(v)->GetInternalField(1))->Value()
                 )
             );
             return V8INT64;
         }
         if (id == V8UINT64) {
             val->u64 = static_cast<uint64_t>(
-                reinterpret_cast<uintptr_t>(Local<External>::Cast(
-                    Local<Object>::Cast(v)->GetInternalField(1))->Value()
+                reinterpret_cast<uintptr_t>(v8External::Cast(
+                    v8Object::Cast(v)->GetInternalField(1))->Value()
                 )
             );
             return V8UINT64;
@@ -242,7 +242,7 @@ static void ToLong(const v8::FunctionCallbackInfo<v8::Value>& args) {
     js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
     HandleScope handle_scope(isolate);
     ThrowNotEnoughArgs(isolate, argc < 1);
-    Local <Context> context = isolate->GetCurrentContext();
+    v8Context context = isolate->GetCurrentContext();
     bool issigned = true;
     if (argc > 1)
         issigned = !args[1]->BooleanValue(context).FromJust();
@@ -250,7 +250,7 @@ static void ToLong(const v8::FunctionCallbackInfo<v8::Value>& args) {
     union integer64_u ival;
     ival.low = ival.high = 0;
     if (args[0]->IsObject()) {  // likely array
-        Local <Object> obj = Local<Object>::Cast(args[0]);
+        v8Object obj = v8Object::Cast(args[0]);
         ival.low = obj->Get(context, 0).ToLocalChecked()
                         ->Int32Value(context).FromJust();
         ival.high = obj->Get(context, 1).ToLocalChecked()
@@ -264,7 +264,7 @@ static void ToLong(const v8::FunctionCallbackInfo<v8::Value>& args) {
                 ival.u64 = d;
         }
     } else {
-        Local<String> s = args[0]->ToString(context).ToLocalChecked();
+        v8String s = args[0]->ToString(context).ToLocalChecked();
         String::Utf8Value stval(s);
         if (*stval) {
             errno = 0;
