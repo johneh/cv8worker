@@ -737,15 +737,17 @@ int js_set(js_handle *hobj, const char *key, js_handle *hval) {
 
 int js_set_string(js_handle *hobj,
             const char *name, const char *val) {
-    Isolate *isolate = hobj->vm->isolate;
+    js_vm *vm = hobj->vm;
+    Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate)
     v8Value v1 = v8Value::New(isolate, hobj->handle);
     if (!v1->IsObject()) {
-        js_set_errstr(hobj->vm, "js_set_string: object argument expected");
+        js_set_errstr(vm, "js_set_string: object argument expected");
         return 0;
     }
     v8Object obj = v8Object::Cast(v1);
-    return obj->Set(v8_str(isolate, name), v8_str(isolate, val));
+    return obj->Set(v8Context::New(isolate, vm->context),
+                v8_str(isolate, name), v8_str(isolate, val)).FromJust();
 }
 
 js_handle *js_array(js_vm *vm, int length) {

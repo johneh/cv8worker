@@ -34,14 +34,17 @@ enum js_code {
     V8ARRAY,
     V8FUNC,
     V8ERROR,
-    V8COMPILERUN,
+};
+
+enum js_cmd {
+    V8COMPILERUN = 1,
     V8CALL,
     V8CALLSTR,
     V8GC,   /* Request garbage collection */
 };
 
 struct js8_arg_s {
-    enum js_code type;
+    enum js_cmd type;
     int nargs;   /* js_call */
     js_vm *vm;
 
