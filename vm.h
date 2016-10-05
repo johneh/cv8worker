@@ -27,6 +27,7 @@ struct js_vm_s {
     v8::Persistent<v8::ObjectTemplate> extfunc_template;
     v8::Persistent<v8::ObjectTemplate> i64_template;
     v8::Persistent<v8::ObjectTemplate> ui64_template;
+    v8::Persistent<v8::ObjectTemplate> go_template;
 
     v8::Persistent<v8::Value> ctype_proto;
     v8::Persistent<v8::Value> cptr_proto;
@@ -56,6 +57,11 @@ struct js_handle_s {
 #define FREE_EXTWRAP    (1 << 7)
 #define FREE_DLWRAP (1 << 8)
 
+// Coroutine flags
+#define GoNoCallback    (1 << 13)
+#define GoDeferReset    (1 << 14)
+#define GoInString      (1 << 15)
+
     union {
         double d;
         char *stp;
@@ -67,6 +73,7 @@ struct js_handle_s {
         Fnfree free_func;
         struct js_handle_s *(*free_extwrap)(js_vm *, int, struct js_handle_s *[]);
         void (*free_dlwrap)(js_vm *, int, void *argv);
+        void *fp;
     };
     v8::Persistent<v8::Value> handle;
 };
@@ -105,6 +112,7 @@ static inline v8::Local<v8::String> v8_str(v8::Isolate* isolate,
 #define v8Value Local<Value>
 #define v8String Local<String>
 #define v8Object Local<Object>
+#define v8Array Local<Array>
 #define v8Context Local<Context>
 #define v8Function Local<Function>
 #define v8ObjectTemplate Local<ObjectTemplate>

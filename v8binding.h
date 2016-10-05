@@ -4,28 +4,15 @@ extern "C" {
 #include "libmill.h"
 #include "jsdef.h"
 
-struct js_coro_s {
-    /* C from JS */
-    void *coro;
-    js_handle *inval;
-
-    /* JS from C */
-    js_handle *outval;
-    js_handle *callback; // Exceptions thrown are swallowed.
-    int err;    // errstr in outval
-
-    struct js_vm_s *vm;
-};
-
-
 enum js_code {
     V8UNKNOWN = 0,
-    /* begin ctypes */
+    /* begin C objects */
     V8EXTPTR,
     V8EXTFUNC,
     V8INT64,
     V8UINT64,
-    /* end ctypes */
+    V8GO,
+    /* end C objects */
     V8UNDEFINED,
     V8NULL,
     V8NUMBER,

@@ -8,6 +8,8 @@
 #include <dlfcn.h>
 #include <math.h>
 
+#include <sched.h>
+
 #include "v8.h"
 #include "libplatform/libplatform.h"
 
@@ -78,12 +80,11 @@ fprintf(stderr, format , ## args);
 #endif
 
 
-extern js_coro *choose_coro(chan ch, int64_t ddline);
+extern js_handle *choose_coro(chan ch, int64_t ddline);
 static js_handle *init_handle(js_vm *vm,
             js_handle *h, v8Value value);
 static inline js_handle *make_handle(js_vm *vm,
             v8Value value, enum js_code type);
-static void *ExternalPtrValue(js_vm *vm, v8Value v);
 static void WeakPtrCallback(
         const v8::WeakCallbackInfo<js_handle> &data);
 
@@ -109,6 +110,324 @@ static void Panic(Isolate *isolate, TryCatch *try_catch) {
     fprintf(stderr, "%s\n", errstr);
     exit(1);
 }
+
+////////////////////////////////// Coroutine //////////////////////////////////
+
+// InternalField indices
+enum {
+    GoFunc = 1,
+    GoIn,
+    GoCallback,
+};
+
+static v8Object NewGo(js_vm *vm, void *fptr) {
+    Isolate *isolate = vm->isolate;
+    EscapableHandleScope handle_scope(isolate);
+    v8ObjectTemplate templ = v8ObjectTemplate::New(isolate, vm->go_template);
+    v8Object obj = templ->NewInstance(
+                        isolate->GetCurrentContext()).ToLocalChecked();
+    obj->SetAlignedPointerInInternalField(0,
+             reinterpret_cast<void*>(static_cast<uintptr_t>(V8GO<<2)));
+    obj->SetInternalField(GoFunc, External::New(isolate, fptr));
+    // The rest of the internal fields are "Undefined".
+    return handle_scope.Escape(obj);
+}
+
+static v8Object ToGo(v8Value v) {
+    if (v->IsObject()) {
+        v8Object cr = v8Object::Cast(v);
+        if (cr->InternalFieldCount() == 4
+            && (V8GO == static_cast<int>(reinterpret_cast<uintptr_t>(
+                    cr->GetAlignedPointerFromInternalField(0)) >> 2))
+        )
+        return cr;
+    }
+    return v8Object();  // Empty handle
+}
+
+static v8Object CloneGo(js_vm *vm, v8Object cr1) {
+    Isolate *isolate = vm->isolate;
+    v8Context context = isolate->GetCurrentContext();
+    EscapableHandleScope handle_scope(isolate);
+    v8Object cr2 = NewGo(vm,
+                    v8External::Cast(cr1->GetInternalField(1))->Value());
+    v8Array props1 = cr1->GetOwnPropertyNames(context).ToLocalChecked();
+    unsigned num_props1 = props1->Length();
+    for (unsigned i = 0; i < num_props1; i++) {
+        v8Value property;
+        if (props1->Get(context, i).ToLocal(&property)) {
+            cr2->Set(context, property,
+                    cr1->Get(context, property).ToLocalChecked()).FromJust();
+        }
+    }
+    return handle_scope.Escape(cr2);
+}
+
+// Start a $go() coroutine in the main thread.
+coroutine static void start_go(mill_pipe inq) {
+    while (true) {
+        int done;
+        js_handle *hcr = *((js_handle **) mill_piperecv(inq, &done));
+        if (done)
+            break;
+        assert(hcr->type == V8GO);
+        Fngo fn = reinterpret_cast<Fngo>(hcr->ptr);
+        hcr->ptr = nullptr; // may be used by js_tostring() etc.
+        go(fn(hcr->vm, hcr));
+    }
+}
+
+// Receive coroutine with result from the main thread.
+coroutine static void recv_go(js_vm *vm) {
+    while (true) {
+        int done;
+        js_handle *hcr = *((js_handle **) mill_piperecv(vm->outq, &done));
+        if (done) {
+            mill_pipefree(vm->outq);
+            break;
+        }
+        /* Send to the channel to be processed by the V8 microtask. */
+        int rc = mill_chs(vm->ch, &hcr);
+        assert(rc == 0);
+    }
+}
+
+static int check_go(js_vm *vm);
+
+static void send_go(js_vm *vm, js_handle *hcr) {
+    int rc = mill_pipesend(vm->inq, (void *) &hcr);
+    if (rc == -1) {
+        // FIXME
+    }
+    check_go(vm);
+}
+
+// $go(coro, input [, callback])
+static void Go(const FunctionCallbackInfo<Value>& args) {
+    js_handle *hcr;
+    js_vm *vm;
+
+    { // start V8 scope
+
+    Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
+    int argc = args.Length();
+    ThrowNotEnoughArgs(isolate, argc < 2);
+    vm = static_cast<js_vm*>(isolate->GetData(0));
+    int flags = 0;
+    if (argc == 2)
+        flags |= GoNoCallback;
+    else if (!args[2]->IsFunction())
+        ThrowTypeError(isolate, "$go argument #3: function expected");
+
+    v8Object cr0 = ToGo(args[0]);
+    if (cr0.IsEmpty())
+        ThrowTypeError(isolate, "$go argument #1: coroutine expected");
+
+    v8Object cr = CloneGo(vm, cr0);
+    cr->SetInternalField(GoIn, args[1]);
+    if (argc > 2)
+        cr->SetInternalField(GoCallback, args[2]);
+    hcr = make_handle(vm, cr, V8GO);
+    hcr->ptr = v8External::Cast(cr->GetInternalField(GoFunc))->Value();
+    hcr->flags |= flags;
+    if (!(flags & GoNoCallback))
+        vm->ncoro++;
+
+    if (args[1]->IsString()) {
+        /* js_tostring(cr) returns the input string
+         * and does not need to acquire any Locker object! */
+        v8String s = v8String::Cast(args[1]);
+        int utf8len = s->Utf8Length();      /* >= 0 */
+        char *p = (char *) emalloc(utf8len + 1);
+        int l = s->WriteUtf8(p, utf8len);
+        p[l] = '\0';
+        hcr->fp = reinterpret_cast<void *>(p);
+        hcr->flags |= GoInString;
+    } else
+        hcr->fp = nullptr;
+
+    }   // end V8 scope
+
+    send_go(vm, hcr);
+}
+
+// Execute callback(err, data). Swallow any thrown exceptions.
+static void RunGoCallback(js_vm *vm, js_handle *hcr) {
+    Isolate *isolate = vm->isolate;
+    LOCK_SCOPE(isolate)
+    vm->ncoro--;
+    TryCatch try_catch(isolate);
+
+    // GetCurrentContext() is empty if called from WaitFor().
+    v8Context context = v8Context::New(isolate, vm->context);
+    Context::Scope context_scope(context);
+
+    v8Object cr = v8Object::Cast(v8Value::New(isolate, hcr->handle));
+    v8Function cb = v8Function::Cast(cr->GetInternalField(GoCallback));
+    js_handle *hout = reinterpret_cast<js_handle *>(hcr->fp);
+    v8Value outval = v8Value::New(isolate, hout->handle);
+    hout->flags &= ~GoDeferReset;
+    js_reset(hout);
+
+    v8Value args[2];
+    if (outval->IsNativeError()) {
+        args[0] = outval;
+        args[1] = v8::Null(isolate);
+    } else {
+        args[0] = v8::Null(isolate);
+        args[1] = outval;
+    }
+    hcr->flags &= ~GoDeferReset;
+    js_reset(hcr);
+
+    assert(!try_catch.HasCaught());
+    cb->Call(context->Global(), 2, args);
+    if (try_catch.HasCaught()) {
+        Panic(isolate, &try_catch);
+    }
+}
+
+static void WaitFor(js_vm *vm) {
+    while (vm->ncoro > 0) {
+        v8::Isolate::SuppressMicrotaskExecutionScope scope(vm->isolate);
+        DPRINT("[[ WaitFor: %d unfinished coroutines. ]]\n", vm->ncoro);
+        js_handle *hcr = chr(vm->ch, js_handle *);
+        assert(hcr);
+        RunGoCallback(vm, hcr);
+    }
+}
+
+static int check_go(js_vm *vm) {
+    Isolate *isolate = vm->isolate;
+    int64_t ddline = now() + 1;
+    int k = 0;
+
+    DPRINT("[[ v8Microtask: %d coroutines need processing. ]]\n", vm->ncoro);
+    while (vm->ncoro > 0) {
+        js_handle *hcr;
+        {
+            Unlocker unlocker(isolate);
+            hcr = choose_coro(vm->ch, ddline);
+        }
+        if (hcr) {
+            k++;
+            v8::Isolate::SuppressMicrotaskExecutionScope scope(isolate);
+            RunGoCallback(vm, hcr);
+        } else
+            break;
+    }
+    if (k > 0)
+        DPRINT("[[ v8Microtask: processed %d coroutines. ]]\n", k);
+    return k;
+}
+
+static void v8Microtask(void *data) {
+    js_vm *vm = (js_vm *) data;
+    int nprocessed = check_go(vm);
+    if (nprocessed == 0 && vm->ncoro > 0) {
+        Unlocker unlocker(vm->isolate);
+        /* yield(); XXX: ? */
+    }
+}
+
+// Callback triggered after microtasks are run. Callback will trigger even
+// if microtasks were attempted to run, but the microtasks queue was empty
+// and no single microtask was actually executed.
+
+static void v8MicrotasksCompleted(Isolate *isolate) {
+    // Reinstall the Microtask.
+    isolate->EnqueueMicrotask(v8Microtask, isolate->GetData(0));
+}
+
+static void MakeGoTemplate(js_vm *vm) {
+    Isolate *isolate = vm->isolate;
+    HandleScope handle_scope(isolate);
+    v8ObjectTemplate templ = ObjectTemplate::New(isolate);
+    templ->SetInternalFieldCount(4);
+    vm->go_template.Reset(isolate, templ);
+}
+
+js_handle *js_go(js_vm *vm, Fngo fptr) {
+    Isolate *isolate = vm->isolate;
+    LOCK_SCOPE(isolate)
+    v8Context context = v8Context::New(isolate, vm->context);
+    Context::Scope context_scope(context);
+    return make_handle(vm, NewGo(vm, reinterpret_cast<void *>(fptr)), V8GO);
+}
+
+js_handle *js_recv(js_handle *hcr) {
+    js_vm *vm = hcr->vm;
+    Isolate *isolate = vm->isolate;
+    LOCK_SCOPE(isolate)
+    v8Object cr = ToGo(v8Value::New(isolate, hcr->handle));
+    if (cr.IsEmpty()) {
+        js_set_errstr(vm,
+                "js_recv: coroutine object argument expected");
+        return 0;
+    }
+    return make_handle(vm, cr->GetInternalField(GoIn), V8UNKNOWN);
+}
+
+const char *js_recv_string(js_handle *hcr) {
+    if (hcr->type == V8GO && (hcr->flags & GoInString))
+        return reinterpret_cast<char *>(hcr->fp);
+    Isolate *isolate = hcr->vm->isolate;
+    Locker locker(isolate);
+    if (hcr->type != V8GO) {
+        js_set_errstr(hcr->vm,
+                "js_recv_string: coroutine object argument expected");
+    } else {
+        js_set_errstr(hcr->vm, "js_recv_string: not a string input");
+    }
+    return nullptr;
+}
+
+// $go(coro, in, callback)
+// $go(coro, in) --> GoNoCallback flag is set.
+//      If GoNoCallback flag is set, ignore hout and reset the coro handle.
+//      Otherwise, schedule execution of the callback.
+//  N.B.: hcr _should_ not be used after this.
+
+int js_send(js_handle *hcr, js_handle *hout) {
+    js_vm *vm = hcr->vm;
+    Isolate *isolate = vm->isolate;
+    if (hcr->type != V8GO) {
+        Locker locker(isolate);
+        js_set_errstr(vm, "js_send: coroutine object argument expected");
+        return 0;
+    }
+
+    if (hcr->flags & GoNoCallback) {
+        // XXX: ignore hout (should be NULL)
+        assert(!hout);
+        js_reset(hcr);
+        return 1;
+    }
+
+    if (hcr->flags & GoDeferReset) {
+        Locker locker(isolate);
+        js_set_errstr(vm, "js_send: illegal operation");
+        return 0;
+    }
+
+    if (!hout)
+        hout = vm->null_handle;
+    if (hcr->flags & GoInString) {
+        // String input.
+        free(hcr->fp);
+        hcr->flags &= ~GoInString;
+    }
+    hcr->fp = reinterpret_cast<void *>(hout);
+    hout->flags |= GoDeferReset;
+    // Coroutine is running in a different thread.
+    int rc = mill_pipesend(vm->outq, &hcr);
+    assert(rc == 0);
+    hcr->flags |= GoDeferReset;
+    return 1;
+}
+
+///////////////////////////////////End Coroutine////////////////////////////////
 
 static void Print(const FunctionCallbackInfo<Value>& args) {
     bool first = true;
@@ -160,116 +479,6 @@ static void MSleep(const FunctionCallbackInfo<Value>& args) {
                     isolate->GetCurrentContext()).FromJust();
     }
     mill_sleep(now()+n);
-}
-
-// $go(coro, inval, callback)
-static void Go(const FunctionCallbackInfo<Value>& args) {
-    js_coro *cr;
-    Fncoro fn;
-    js_vm *vm;
-
-    {
-    Isolate *isolate = args.GetIsolate();
-    HandleScope handle_scope(isolate);
-    int argc = args.Length();
-    ThrowNotEnoughArgs(isolate, argc < 3);
-    vm = static_cast<js_vm*>(isolate->GetData(0));
-    fn = reinterpret_cast<Fncoro>(ExternalPtrValue(vm, args[0]));
-    if (!fn)
-        ThrowTypeError(isolate, "$go argument #1: coroutine expected");
-    if (!args[2]->IsFunction())
-        ThrowTypeError(isolate, "$go argument #3: function expected");
-    cr = new js_coro;
-    cr->coro = nullptr;
-    cr->vm = vm;
-    cr->callback = make_handle(vm, args[2], V8FUNC);
-    cr->inval = make_handle(vm, args[1], V8UNKNOWN);
-    cr->err = 0;
-    cr->outval = nullptr;
-    vm->ncoro++;
-    }
-
-    go(fn(vm, cr, cr->inval));
-}
-
-// callback(err, data)
-static void RunCoroCallback(js_vm *vm, js_coro *cr) {
-    Isolate *isolate = vm->isolate;
-    LOCK_SCOPE(isolate)
-    vm->ncoro--;
-    TryCatch try_catch(isolate);
-
-    // GetCurrentContext() is empty if called from WaitFor().
-    v8Context context = v8Context::New(isolate, vm->context);
-    Context::Scope context_scope(context);
-
-    v8Function cb = v8Function::Cast(
-                v8Value::New(isolate, cr->callback->handle));
-    js_reset(cr->callback);
-
-    assert(!cb.IsEmpty());
-    v8Value args[2];
-    assert(cr->outval);
-    args[1] = v8Value::New(isolate, cr->outval->handle);
-    args[0] = v8::Null(isolate);
-    if (cr->err) {
-        args[0] = args[1]->ToString(context).ToLocalChecked();
-        args[1] = v8::Null(isolate);
-    }
-    js_reset(cr->inval);
-
-    /* XXX: _must_ not be disposed in the C code.
-     * Should be ref. counting persistent handles?? */
-    if(cr->outval != cr->inval)
-        js_reset(cr->outval);
-    delete cr;
-
-    assert(!try_catch.HasCaught());
-    cb->Call(context->Global(), 2, args);
-    if (try_catch.HasCaught()) {
-        Panic(isolate, &try_catch);
-    }
-}
-
-static void send_coro(js_vm *vm, js_coro *cr) {
-    int rc = mill_pipesend(vm->inq, (void *) &cr);
-    if (rc == -1) {
-        char serr[] = "$send: send to a closed pipe";
-        cr->outval = js_string(vm, serr, strlen(serr));
-        cr->err = 1;
-        cr->coro = nullptr;
-        int rc = mill_chs(cr->vm->ch, &cr);
-        assert(rc == 0);
-    }
-}
-
-// $send(coro, inval, callback)
-static void Send(const FunctionCallbackInfo<Value>& args) {
-    js_vm *vm;
-    js_coro *cr;
-
-    {
-    Isolate *isolate = args.GetIsolate();
-    HandleScope handle_scope(isolate);
-    int argc = args.Length();
-    ThrowNotEnoughArgs(isolate, argc < 3);
-    vm = static_cast<js_vm*>(isolate->GetData(0));
-
-    void *fn = ExternalPtrValue(vm, args[0]);
-    if (!fn)
-        ThrowTypeError(isolate, "$send argument #1: coroutine expected");
-    if (!args[2]->IsFunction())
-        ThrowTypeError(isolate, "$send argument #3: function expected");
-    cr = new js_coro;
-    cr->vm = vm;
-    cr->coro = fn;
-    cr->callback = make_handle(vm, args[2], V8FUNC);
-    cr->inval = make_handle(vm, args[1], V8UNKNOWN);
-    cr->err = 0;
-    cr->outval = nullptr;
-    vm->ncoro++;
-    }
-    send_coro(vm, cr);
 }
 
 static void Close(const FunctionCallbackInfo<Value>& args) {
@@ -391,42 +600,6 @@ static void CallForeignFunc(
     }
 }
 
-static void WaitFor(js_vm *vm) {
-    while (vm->ncoro > 0) {
-        DPRINT("[[ WaitFor: %d unfinished coroutines. ]]\n", vm->ncoro);
-        js_coro *cr = chr(vm->ch, js_coro *);
-        assert(cr);
-        RunCoroCallback(vm, cr);
-    }
-}
-
-static void v8Microtask(void *data) {
-    js_vm *vm = (js_vm *) data;
-    int64_t ddline = now() + 1;
-    int k = 0;
-    while (vm->ncoro > 0) {
-        js_coro *cr = choose_coro(vm->ch, ddline);
-        if (cr) {
-            k++;
-            RunCoroCallback(vm, cr);
-        } else
-            break;
-    }
-    if (k > 0)
-        DPRINT("[[ v8Microtask: processed %d coroutines. ]]\n", k);
-    if (vm->ncoro > 0)
-        yield();
-}
-
-// Callback triggered after microtasks are run. Callback will trigger even
-// if microtasks were attempted to run, but the microtasks queue was empty
-// and no single microtask was actually executed.
-
-static void v8MicrotasksCompleted(Isolate *isolate) {
-    // Reinstall the Microtask.
-    isolate->EnqueueMicrotask(v8Microtask, isolate->GetData(0));
-}
-
 // TODO: use pthread_once
 static int v8initialized = 0;
 
@@ -449,19 +622,6 @@ static void v8init(void) {
     v8initialized = 1;
 }
 
-// Start a $send() coroutine in the main thread.
-coroutine static void start_coro(mill_pipe p) {
-    while (true) {
-        int done;
-        js_coro *cr = *((js_coro **) mill_piperecv(p, &done));
-        if (done)
-            break;
-        assert(cr->coro);
-        Fncoro co = reinterpret_cast<Fncoro>(cr->coro);
-        go(co(cr->vm, cr, cr->inval));
-    }
-}
-
 // Invoked by the main thread.
 js_vm *js8_vmnew(mill_worker w) {
     js_vm *vm = new js_vm;
@@ -470,11 +630,11 @@ js_vm *js8_vmnew(mill_worker w) {
     assert(vm->inq);
     vm->outq = mill_pipemake(sizeof (void *));
     assert(vm->outq);
-    vm->ch = mill_chmake(sizeof (js_coro *), 5); // XXX: How to select a bufsize??
+    vm->ch = mill_chmake(sizeof (js_handle *), 5); // XXX: How to select a bufsize??
     assert(vm->ch);
     vm->ncoro = 0;
     vm->errstr = nullptr;
-    go(start_coro(vm->inq));
+    go(start_go(vm->inq));
     return vm;
 }
 
@@ -495,21 +655,6 @@ static void GlobalSet(v8Name name, v8Value val,
     if (strcmp(*str, "$errno") == 0)
         errno = val->ToInt32(
                 isolate->GetCurrentContext()).ToLocalChecked()->Value();
-}
-
-// Receive coroutine with result from the main thread.
-coroutine static void recv_coro(js_vm *vm) {
-    while (true) {
-        int done;
-        js_coro *cr = *((js_coro **) mill_piperecv(vm->outq, &done));
-        if (done) {
-            mill_pipefree(vm->outq);
-            break;
-        }
-        /* Send to the channel to be processed by the V8 microtask. */
-        int rc = mill_chs(vm->ch, &cr);
-        assert(rc == 0);
-    }
 }
 
 // Invoked by the main thread.
@@ -569,7 +714,7 @@ static js_handle *init_handle(js_vm *vm,
             }
             h->type = (enum js_code) id;
         } else
-            h->type = V8OBJECT;
+            h->type = V8OBJECT; // including Long, Go ..
     } else
         h->type = V8UNKNOWN;
     h->handle.Reset(vm->isolate, value);
@@ -587,6 +732,8 @@ static js_handle *make_handle(js_vm *vm,
     vm->isolate->AdjustAmountOfExternalAllocatedMemory(
                 static_cast<int64_t>(sizeof(js_handle)));
     h->flags = 0;
+    h->ptr = nullptr;
+    h->fp = nullptr;
     h->vm = vm;
     if (type) {
         h->type = type;
@@ -888,6 +1035,7 @@ js_handle *js_pointer(js_vm *vm, void *ptr) {
     return h;
 }
 
+#if 0
 // XXX: returns NULL if not V8EXTPTR!
 static void *ExternalPtrValue(js_vm *vm, v8Value v) {
     if (!v->IsObject())
@@ -897,6 +1045,7 @@ static void *ExternalPtrValue(js_vm *vm, v8Value v) {
         return v8External::Cast(obj->GetInternalField(1))->Value();
     return nullptr;
 }
+#endif
 
 js_handle *js_cfunc(js_vm *vm, const struct cffn_s *func_wrap) {
     Isolate *isolate = vm->isolate;
@@ -914,26 +1063,10 @@ js_handle *js_cfunc(js_vm *vm, const struct cffn_s *func_wrap) {
     return make_handle(vm, fnObj, V8EXTFUNC);
 }
 
-// Send from C coroutine to V8
-void js_send(js_coro *cr, js_handle *oh, int err) {
-    if (!oh)
-        oh = cr->vm->null_handle;
-    cr->outval = oh;
-    cr->err = err;
-    if (!cr->coro) {
-        // Coroutine is in the V8 thread.
-        int rc = mill_chs(cr->vm->ch, &cr);
-        assert(rc == 0);
-    } else {
-        // Coroutine is running in the main thread.
-        int rc = mill_pipesend(cr->vm->outq, &cr);
-        assert(rc == 0);
-    }
-}
-
 const char *js_tostring(js_handle *h) {
     js_vm *vm = h->vm;
     Isolate *isolate = vm->isolate;
+
     Locker locker(isolate);
     if (h->type == V8STRING && (h->flags & STR_HANDLE) != 0) {
         return h->stp;
@@ -1032,7 +1165,10 @@ void *js_topointer(js_handle *h) {
 void js_reset(js_handle *h) {
     Isolate *isolate = h->vm->isolate;
     Locker locker(isolate);
-    if ((h->flags & (PERM_HANDLE|ARG_HANDLE|WEAK_HANDLE)) == 0) {
+
+    assert(!(h->flags & GoDeferReset));
+
+    if ((h->flags & (PERM_HANDLE|ARG_HANDLE|WEAK_HANDLE|GoDeferReset)) == 0) {
         Isolate::Scope isolate_scope(isolate); // more than one isolate in worker ???
         h->handle.Reset();
         if (h->flags & STR_HANDLE)
@@ -1482,8 +1618,6 @@ static void CreateIsolate(js_vm *vm) {
                 FunctionTemplate::New(isolate, MSleep));
     global->Set(v8_str(isolate, "$now"),
                 FunctionTemplate::New(isolate, Now));
-    global->Set(v8_str(isolate, "$send"),
-                FunctionTemplate::New(isolate, Send));
     global->Set(v8_str(isolate, "$close"),
                 FunctionTemplate::New(isolate, Close));
     global->Set(v8_str(isolate, "$eval"),
@@ -1553,6 +1687,9 @@ static void CreateIsolate(js_vm *vm) {
     vm->nullptr_handle->flags = (PERM_HANDLE|PTR_HANDLE);
     vm->nullptr_handle->handle.Reset(isolate, nullptr_obj);
 
+    // Create Go object template.
+    MakeGoTemplate(vm);
+
     // Name the global object "Global".
     v8Object realGlobal = v8Object::Cast(
                         context->Global()->GetPrototype());
@@ -1568,7 +1705,7 @@ static void CreateIsolate(js_vm *vm) {
 // Runs in the worker(V8) thread.
 int js8_vminit(js_vm *vm) {
     CreateIsolate(vm);
-    go(recv_coro(vm));
+    go(recv_go(vm));
     return 0;
 }
 

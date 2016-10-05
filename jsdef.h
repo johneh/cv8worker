@@ -7,9 +7,8 @@ typedef struct js_vm_s js_vm;
 struct js_handle_s;
 typedef struct js_handle_s js_handle;
 
-struct js_coro_s;
-typedef struct js_coro_s js_coro;
-typedef void (*Fncoro)(js_vm *vm, js_coro *, js_handle *);
+typedef void (*Fngo)(js_vm *vm, js_handle *coro);
+
 typedef void (*Fnfree)(void *ptr);
 typedef js_handle *(*Fnfnwrap)(js_vm *, int, js_handle *[]);
 

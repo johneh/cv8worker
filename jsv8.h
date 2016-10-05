@@ -62,7 +62,10 @@ extern int js_isstring(js_handle *h);
 extern int js_isnull(js_handle *h);
 extern int js_isundefined(js_handle *h);
 
-extern void js_send(js_coro *t, js_handle *oh, int err);
+extern js_handle *js_go(js_vm *vm, Fngo fptr);
+extern js_handle *js_recv(js_handle *hcr);
+extern const char *js_recv_string(js_handle *hcr) ;
+extern int js_send(js_handle *hcr, js_handle *hout);
 
 extern js_handle *js_error(js_vm *vm, const char *message);
 extern const char *js_errstr(js_vm *vm);

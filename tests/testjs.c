@@ -42,23 +42,30 @@ void testcall(js_vm *vm) {
     js_reset(list_props);
 }
 
-coroutine void do_task1(js_vm *vm, js_coro *cr, js_handle *inh) {
-    yield();
-    const char *s1 = js_tostring(inh);
+coroutine void do_task1(js_vm *vm, js_handle *cr) {
+
+    const char *s1 = js_recv_string(cr);
+    /* Equivalent but requires acquiring lock:
+     *  js_handle *inh = js_recv(cr);
+     *  const char *s1 = js_tostring(inh);
+     *  ... use s1 ...
+     *  js_reset(inh);
+     */
+
     fprintf(stderr, "<- %s\n", s1);
     int k = random() % 50;
     mill_sleep(now() + k);
     char tmp[100];
     sprintf(tmp, "%s -> Task done in %d millsecs ...", s1, k);
-    js_handle *oh = js_string(vm, tmp, -1);
-    js_send(cr, oh, 0);  /* oh and inh disposed by V8 */
+    js_send(cr, js_string(vm, tmp, -1));    /* Both handles freed by V8 */
 }
 
-/* Coroutine in the V8 thread (concurrency) */
+
+/* Coroutine in the main thread (concurrency & parallelism) */
 void testgo(js_vm *vm) {
-    js_handle *p1 = js_pointer(vm, (void *) do_task1);
-    /* p1 is a js object, can set properties on it */
-    int r = js_set_string(p1, "name", "task1");
+    js_handle *cr = js_go(vm, (void *) do_task1);
+    /* cr is a js object, can set properties on it */
+    int r = js_set_string(cr, "name", "task1");
     assert(r);
 
     js_handle *f1 = js_callstr(vm, "(function(co) {\
@@ -66,59 +73,34 @@ void testgo(js_vm *vm) {
         return function(s, callback) {\
             $go(co, s, callback);\
         };\
-    });", NULL, (js_args) { p1 } );
+    });", NULL, (js_args) { cr } );
     assert(f1);
 
     /* Global.task1 = f1; */
     int rc = js_set(JSGLOBAL(vm), "task1", f1);
     assert(rc);
     js_reset(f1);
-    js_reset(p1);
+    js_reset(cr);
 
     rc = js_run(vm,
+"function foo(k) { var s=0; for (var i=0;i <k;i++){s+=i;}return s;}"
 "for(var i=1; i<=5;i++) {\n\
-    task1('go'+i, function (err, data) {\n\
+    task1('send'+i, function (err, data) {\n\
             if (err == null) $print(data);\n\
     });\n\
 }\n"
-"$msleep(35);\n"
+"$msleep(25);\n"
+"/*foo(1000000);$print(foo(2000000));*/"
 "for(var i=6; i<=10;i++) {\n\
-    task1('go'+i, function (err, data) {\n\
+    task1('send'+i, function (err, data) {\n\
         if (err == null) $print(data);\n\
     });\n\
 }\n"
+"$msleep(25);\n"
+"/*foo(1000000);$print(foo(2000000));*/"
     );
-
     CHECK(rc, vm);
 }
-
-/* Coroutine in the main thread (concurrency & parallelism) */
-void testsend(js_vm *vm) {
-    js_handle *p1 = js_pointer(vm, (void *) do_task1);
-    js_handle *f1 = js_callstr(vm, "(function(co) {\
-        return function(s, callback) {\
-            $send(co, s, callback);\
-        };\
-    });", NULL, (js_args) { p1 } );
-    assert(f1);
-
-    /* Global.task1 = f1; */
-    int rc = js_set(JSGLOBAL(vm), "task2", f1);
-    assert(rc);
-    js_reset(f1);
-    js_reset(p1);
-
-    rc = js_run(vm,
-"for(var i=1; i<=5;i++) {\n\
-    task2('send'+i, function (err, data) {\n\
-            if (err == null) $print(data);\n\
-    });\n\
-}\n"
-    );
-
-    CHECK(rc, vm);
-}
-
 
 static char *readfile(const char *filename, size_t *len);
 
@@ -263,8 +245,8 @@ int main(int argc, char *argv[]) {
     testcall(vm);
     testgo(vm);
     testexports(vm);
-    testsend(vm);
     testarraybuffer(vm);
+
     /* testdispose(vm); */ /* make GCTEST=1 */
     /* testdll(vm); */    /* make GCTEST=1 */
 
