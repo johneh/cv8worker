@@ -15,6 +15,7 @@
 #include "v8binding.h"
 #include "vm.h"
 #include "long.h"
+#include "ptr.h"
 #include "util.h"
 
 using namespace v8;
@@ -85,6 +86,13 @@ uint64_t GetUInt64(v8Value v) {
     );
 }
 
+static inline void SetUInt64(v8Value v, uint64_t ui64) {
+    v8Object obj = v8Object::Cast(v);
+    obj->SetInternalField(1,
+            External::New(obj->CreationContext()->GetIsolate(),
+                reinterpret_cast<void*>(static_cast<uintptr_t>(ui64))));
+}
+
 int LongValue(v8Value v, Long64 *val) {
     if (v->IsObject()
             && v8Object::Cast(v)->InternalFieldCount() == 2) {
@@ -121,6 +129,8 @@ enum LongCmd {
     LONG_HIGH32U,
     LONG_ISZERO,
     LONG_EQUAL,
+    LONG_PACK,
+    LONG_UNPACK
 };
 
 static struct lcmd_s {
@@ -137,6 +147,8 @@ static struct lcmd_s {
     { (char *) "high32u", LONG_HIGH32U },
     { (char *) "isZero", LONG_ISZERO },
     { (char *) "eq", LONG_EQUAL },
+    { (char *) "pack", LONG_PACK },
+    { (char *) "unpack", LONG_UNPACK },
     {0}
 };
 
@@ -228,15 +240,40 @@ void LongCntl(const v8::FunctionCallbackInfo<v8::Value>& args) {
                     Boolean::New(isolate, isequal));
     }
         break;
+    case LONG_PACK:
+    case LONG_UNPACK: {
+        if (argc < 3)
+            ThrowNotEnoughArgs(isolate, true);
+        v8Object obj = ToPtr(args[2]);
+        if (obj.IsEmpty())
+            ThrowTypeError(isolate,
+                    "$lcntl: pointer argument (#3) expected");
+        void *ptr = UnwrapPtr(obj);
+        if (!ptr)
+            ThrowError(isolate, "$lcntl: pointer argument is null");
+        size_t off = 0;
+        if (argc > 3)
+            off = args[3]->ToUint32(
+                    isolate->GetCurrentContext()).ToLocalChecked()->Value();
+        ptr = (char *) ptr + off;
+        if (cmd == LONG_PACK) {
+            *(reinterpret_cast<uint64_t *>(ptr)) = ival.u64;
+        } else {
+            ival.u64 = *(reinterpret_cast<uint64_t *>(ptr));
+            SetUInt64(args[0], ival.u64);
+        }
+        args.GetReturnValue().Set(Integer::New(isolate, 8));
+    }
+        break;
     default:
         ThrowError(isolate, "$lcntl: 'cmd' argument is invalid");
     }
 }
 
-// $toLong("string")
-// $toLong(number)
-// $toLong([signed 32-bit low, high])
-static void ToLong(const v8::FunctionCallbackInfo<v8::Value>& args) {
+// $long("string")
+// $long(number)
+// $long([signed 32-bit low, high])
+static void Long(const v8::FunctionCallbackInfo<v8::Value>& args) {
     int argc = args.Length();
     Isolate *isolate = args.GetIsolate();
     js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
@@ -288,7 +325,7 @@ static void ToLong(const v8::FunctionCallbackInfo<v8::Value>& args) {
 Local<FunctionTemplate> LongTemplate(js_vm *vm) {
     Isolate *isolate = vm->isolate;
     EscapableHandleScope handle_scope(isolate);
-    Local<FunctionTemplate> long_templ = FunctionTemplate::New(isolate, ToLong);
+    Local<FunctionTemplate> long_templ = FunctionTemplate::New(isolate, Long);
     for (unsigned i = 0; long_cmds[i].name; i++) {
         // Only primitive values are allowed!
         long_templ->Set(v8_str(isolate, long_cmds[i].name),

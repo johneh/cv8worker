@@ -42,3 +42,12 @@ $print('isequal =', $lcntl(i1, $long.eq, i2));
 
 $print($lcntl($long(1.0/0.0)),
 		$lcntl($long(0.0/0.0)));
+
+var p = $malloc(8);
+$lcntl(i1, $long.pack, p);
+i2 = $long(0);
+$lcntl(i2, $long.unpack, p);
+$print($lcntl(i1), $lcntl(i2));
+$print('isequal =', $lcntl(i1, $long.eq, i2));
+p.free();
+

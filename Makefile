@@ -10,12 +10,13 @@ ifdef GCTEST
 endif
 
 all: libcv8.a
+	cd $(TOPDIR)/bin; make clean; make $(MAKEFLAGS); cd ..;\
 	cd $(TOPDIR)/tests; make clean; make $(MAKEFLAGS); cd ..;
 
 v8binding.o: jsdef.h vm.h util.h long.h ptr.h v8binding.h v8binding.cc
 	$(CPP) $(CPPFLAGS) $(INCLUDES) -DV8BINDIR="\"$(V8_OUTDIR)/\"" -std=c++0x -c v8binding.cc
 
-long.o: v8binding.h vm.h util.h long.h long.cc
+long.o: v8binding.h vm.h util.h ptr.h long.h long.cc
 	$(CPP) $(CPPFLAGS) $(INCLUDES) -std=c++0x -c long.cc
 
 ptr.o: v8binding.h vm.h util.h ptr.h ptr.cc

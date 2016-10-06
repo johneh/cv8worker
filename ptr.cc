@@ -36,6 +36,19 @@ int GetCtypeId(js_vm *vm, v8Value v) {
     return 0;
 }
 
+v8Object ToPtr(v8Value v) {
+    if (v->IsObject()) {
+        v8Object obj = v8Object::Cast(v);
+        if (obj->InternalFieldCount() == 2
+            && (V8EXTPTR == static_cast<int>(reinterpret_cast<uintptr_t>(
+                    obj->GetAlignedPointerFromInternalField(0)) >> 2)
+            )
+        )
+            return obj;
+    }
+    return v8Object();
+}
+
 int IsCtypeWeak(v8Object obj) {
     assert(obj->InternalFieldCount() == 2);
     int id = static_cast<int>(reinterpret_cast<uintptr_t>(
@@ -472,6 +485,10 @@ v8Object WrapPtr(js_vm *vm, void *ptr) {
     obj->SetInternalField(1, External::New(isolate, ptr));
     obj->SetPrototype(v8Value::New(isolate, vm->cptr_proto));
     return handle_scope.Escape(obj);
+}
+
+void *UnwrapPtr(v8Object ptrObj) {
+    return v8External::Cast(ptrObj->GetInternalField(1))->Value();
 }
 
 // Construct the prototype object for C pointers and functions.
