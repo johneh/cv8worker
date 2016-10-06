@@ -8,8 +8,6 @@
 #include <dlfcn.h>
 #include <math.h>
 
-#include <sched.h>
-
 #include "v8.h"
 #include "libplatform/libplatform.h"
 
@@ -78,7 +76,6 @@ fprintf(stderr, format , ## args);
 #else
 #define DPRINT(format, args...) /* nothing */
 #endif
-
 
 extern js_handle *choose_coro(chan ch, int64_t ddline);
 static js_handle *init_handle(js_vm *vm,
@@ -1075,15 +1072,12 @@ js_handle *js_cfunc(js_vm *vm, const struct cffn_s *func_wrap) {
 }
 
 const char *js_tostring(js_handle *h) {
-    js_vm *vm = h->vm;
-    Isolate *isolate = vm->isolate;
-
-    Locker locker(isolate);
     if (h->type == V8STRING && (h->flags & STR_HANDLE) != 0) {
         return h->stp;
     }
-    Isolate::Scope isolate_scope(isolate);
-    HandleScope handle_scope(isolate);
+    js_vm *vm = h->vm;
+    Isolate *isolate = vm->isolate;
+    LOCK_SCOPE(isolate)
     if ((h->flags & STR_HANDLE) != 0)
         free(h->stp);
     h->flags &= ~VALUE_MASK;
@@ -1102,13 +1096,11 @@ const char *js_tostring(js_handle *h) {
 }
 
 double js_tonumber(js_handle *h) {
-    Isolate *isolate = h->vm->isolate;
-    Locker locker(isolate);
     if (h->type == V8NUMBER && (h->flags & DBL_HANDLE) != 0) {
         return h->d;
     }
-    Isolate::Scope isolate_scope(isolate);
-    HandleScope handle_scope(isolate);
+    Isolate *isolate = h->vm->isolate;
+    LOCK_SCOPE(isolate);
     v8Context context = v8Context::New(isolate, h->vm->context);
     double d = v8Value::New(isolate, h->handle)
                     -> NumberValue(context).FromJust();
@@ -1123,13 +1115,11 @@ double js_tonumber(js_handle *h) {
 }
 
 int32_t js_toint32(js_handle *h) {
-    Isolate *isolate = h->vm->isolate;
-    Locker locker(isolate);
     if (h->type == V8NUMBER && (h->flags & INT32_HANDLE) != 0) {
         return h->i;
     }
-    Isolate::Scope isolate_scope(isolate);
-    HandleScope handle_scope(isolate);
+    Isolate *isolate = h->vm->isolate;
+    LOCK_SCOPE(isolate)
     v8Context context = v8Context::New(isolate, h->vm->context);
     int32_t i = v8Value::New(isolate, h->handle)
                         -> Int32Value(context).FromJust();
@@ -1144,23 +1134,24 @@ int32_t js_toint32(js_handle *h) {
 }
 
 void *js_topointer(js_handle *h) {
+    void *ptr;
+    if (h->type == V8EXTPTR && (h->flags & PTR_HANDLE)) {
+        ptr = h->ptr;
+        if (ptr)
+            return ptr;
+    }
+
     js_vm *vm = h->vm;
     Isolate *isolate = vm->isolate;
-    Locker locker(isolate);
+    LOCK_SCOPE(isolate)
     // Clear error
     js_set_errstr(vm, nullptr);
-    if (h->type == V8EXTPTR && (h->flags & PTR_HANDLE))
-        return h->ptr;
-
-    void *ptr;
-    Isolate::Scope isolate_scope(isolate);
-    HandleScope handle_scope(isolate);
-
     v8Value v1 = v8Value::New(isolate, h->handle);
     if (h->type == V8EXTPTR) {
         ptr = v8External::Cast(
                     v8Object::Cast(v1)->GetInternalField(1)
                 )->Value();
+        h->ptr = ptr;
         h->flags |= PTR_HANDLE;
     } else if (v1->IsArrayBuffer()) {
         // The pointer will be invalid if the ArrayBuffer gets
@@ -1177,7 +1168,7 @@ void js_reset(js_handle *h) {
     Isolate *isolate = h->vm->isolate;
     Locker locker(isolate);
 
-    assert(!(h->flags & GoDeferReset));
+    /* assert(!(h->flags & GoDeferReset)); -- in == out */
 
     if ((h->flags & (PERM_HANDLE|ARG_HANDLE|WEAK_HANDLE|GoDeferReset)) == 0) {
         Isolate::Scope isolate_scope(isolate); // more than one isolate in worker ???
