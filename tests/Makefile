@@ -6,10 +6,14 @@ LIBS = $(V8_LIBS) $(MILL_LIBS) -lm -lstdc++
 
 BINS := testjs
 
+ifdef GCTEST
+EXTRA_FLAGS += -DGCTEST=1
+endif
+
 all: $(BINS)
 
 testjs.o: $(TOPDIR)/jsv8.h $(TOPDIR)/jsdef.h testjs.c
-	$(CC) $(CFLAGS) $(INCLUDES) -c testjs.c
+	$(CC) $(CFLAGS) $(EXTRA_FLAGS) $(INCLUDES) -c testjs.c
 
 testjs: testjs.o $(TOPDIR)/libcv8.a
 	$(CC) -o $@ $^ $(LIBS)

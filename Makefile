@@ -6,9 +6,11 @@ LIBS = $(V8_LIBS) $(MILL_LIBS) -lm -lstdc++
 
 ifdef GCTEST
 	CPPFLAGS += -DV8TEST=1
+	MAKEFLAGS += -DGCTEST=1
 endif
 
 all: libcv8.a
+	cd $(TOPDIR)/tests; make clean; make $(MAKEFLAGS); cd ..;
 
 v8binding.o: jsdef.h vm.h util.h long.h ptr.h v8binding.h v8binding.cc
 	$(CPP) $(CPPFLAGS) $(INCLUDES) -DV8BINDIR="\"$(V8_OUTDIR)/\"" -std=c++0x -c v8binding.cc

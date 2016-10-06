@@ -369,6 +369,15 @@ js_handle *js_recv(js_handle *hcr) {
     return make_handle(vm, cr->GetInternalField(GoIn), V8UNKNOWN);
 }
 
+/*
+ *  const char *s1 = js_recv_string(cr);
+ * Equivalent code but requires acquiring a locker object:
+ *  js_handle *inh = js_recv(cr);
+ *  const char *s1 = js_tostring(inh);
+ *    ... use s1 ...
+ *  js_reset(inh);
+ */
+
 const char *js_recv_string(js_handle *hcr) {
     if (hcr->type == V8GO && (hcr->flags & GoInString))
         return reinterpret_cast<char *>(hcr->fp);
@@ -387,7 +396,9 @@ const char *js_recv_string(js_handle *hcr) {
 // $go(coro, in) --> GoNoCallback flag is set.
 //      If GoNoCallback flag is set, ignore hout and reset the coro handle.
 //      Otherwise, schedule execution of the callback.
-//  N.B.: hcr _should_ not be used after this.
+//  N.B.:
+//  [1] hcr _should_ not be used after this.
+//  [2] Does not require acquiring a locker object.
 
 int js_send(js_handle *hcr, js_handle *hout) {
     js_vm *vm = hcr->vm;

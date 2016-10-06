@@ -85,14 +85,14 @@ void testgo(js_vm *vm) {
     rc = js_run(vm,
 "function foo(k) { var s=0; for (var i=0;i <k;i++){s+=i;}return s;}"
 "for(var i=1; i<=5;i++) {\n\
-    task1('send'+i, function (err, data) {\n\
+    task1('go'+i, function (err, data) {\n\
             if (err == null) $print(data);\n\
     });\n\
 }\n"
 "$msleep(25);\n"
 "/*foo(1000000);$print(foo(2000000));*/"
 "for(var i=6; i<=10;i++) {\n\
-    task1('send'+i, function (err, data) {\n\
+    task1('go'+i, function (err, data) {\n\
         if (err == null) $print(data);\n\
     });\n\
 }\n"
@@ -237,6 +237,53 @@ cairo.surface_write_to_png(surface, 'crect.png');\
     assert(weak_counter == 2);
 }
 
+
+void testpack(js_vm *vm) {
+    void *ptr = malloc(256);
+    assert(ptr);
+    js_handle *p1 = js_pointer(vm, ptr);
+    CHECK(p1, vm);
+    js_handle *r1 = js_callstr(vm, "var w = new WeakMap();\n\
+    (function(p) {\n\
+        var a = new Int32Array([-1,-2,-3,-4]);\n\
+        p.pack(0, 'idsia', 10, 3.1416, 'apple banana', 1, a);\n\
+        var x, k, off=0;\n\
+        [x, k] = p.unpack(off, 'i'); $print(x); off+=k;\n\
+        [x, k] = p.unpack(off, 'd'); $print(x); off+=k;\n\
+        [x, k] = p.unpack(off, 's'); $print(x); off+=k;\n\
+        [x, k] = p.unpack(off, 'i'); $print(x); off+=k;\n\
+        var i1, d, s1, i2;\n\
+        [i1, d, s1, i2, k] = p.unpack(0, 'idsi');\n\
+        $print(i1); $print(s1); $print(off == k);\n\
+        var ab;\n\
+        [ab] = p.unpack(k, 'a');\n\
+        $print(ab instanceof ArrayBuffer);\n\
+        a = new Int32Array(ab); $print(a[0], a[1], a[2], a[3]);\n\
+        [ab] = p.unpack(k, 'A');\n\
+        /* With 'A', need to keep a reference to the pointer P. */\n\
+        w.set(ab, p); /* keeps P alive as long as AB is not garbage collected */\n\
+        return ab;\n\
+    });", NULL, (js_args) { p1 } );
+    CHECK(r1, vm);
+    assert(js_isobject(r1));
+    js_dispose(p1, free);
+    int weak_counter = js_gc(vm);
+    /* p1 still alive and r1 (ArrayBuffer) is valid. */
+    assert(weak_counter == 0);
+
+    js_handle *r2 = js_callstr(vm, "(function(ab) {\n\
+        var a = new Int32Array(ab);\n\
+        $print(a[0], a[1], a[2], a[3]);\n\
+    });", NULL, (js_args) { r1 });
+    CHECK(r2, vm);
+    js_reset(r2);
+    js_reset(r1);
+    /* p1 can be garbage collected. */
+    weak_counter = js_gc(vm);
+    assert(weak_counter == 1);
+}
+
+
 int main(int argc, char *argv[]) {
     mill_init(-1, 0);
     mill_worker w = mill_worker_create();
@@ -246,7 +293,9 @@ int main(int argc, char *argv[]) {
     testgo(vm);
     testexports(vm);
     testarraybuffer(vm);
-
+#ifdef GCTEST
+    testpack(vm);
+#endif
     /* testdispose(vm); */ /* make GCTEST=1 */
     /* testdll(vm); */    /* make GCTEST=1 */
 
