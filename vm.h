@@ -57,11 +57,6 @@ struct js_handle_s {
 #define FREE_EXTWRAP    (1 << 7)
 #define FREE_DLWRAP (1 << 8)
 
-// Coroutine flags
-#define GoNoCallback    (1 << 13)
-#define GoDeferReset    (1 << 14)
-#define GoInString      (1 << 15)
-
     union {
         double d;
         char *stp;
@@ -73,7 +68,7 @@ struct js_handle_s {
         Fnfree free_func;
         struct js_handle_s *(*free_extwrap)(js_vm *, int, struct js_handle_s *[]);
         void (*free_dlwrap)(js_vm *, int, void *argv);
-        void *fp;
+        js_handle *hp;
     };
     v8::Persistent<v8::Value> handle;
 };

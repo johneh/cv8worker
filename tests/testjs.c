@@ -42,22 +42,15 @@ void testcall(js_vm *vm) {
     js_reset(list_props);
 }
 
-coroutine void do_task1(js_vm *vm, js_handle *cr) {
-
-    const char *s1 = js_recv_string(cr);
-    /* Equivalent but requires acquiring lock:
-     *  js_handle *inh = js_recv(cr);
-     *  const char *s1 = js_tostring(inh);
-     *  ... use s1 ...
-     *  js_reset(inh);
-     */
-
+coroutine void do_task1(js_vm *vm, js_handle *cr, js_handle *hin) {
+    const char *s1 = js_tostring(hin);
     fprintf(stderr, "<- %s\n", s1);
     int k = random() % 50;
     mill_sleep(now() + k);
     char tmp[100];
     sprintf(tmp, "%s -> Task done in %d millsecs ...", s1, k);
-    js_send(cr, js_string(vm, tmp, -1));    /* Both handles freed by V8 */
+    js_gosend(cr, js_string(vm, tmp, -1));    /* Both handles freed by V8 */
+    js_godone(cr);
 }
 
 
@@ -89,8 +82,8 @@ void testgo(js_vm *vm) {
             if (err == null) $print(data);\n\
     });\n\
 }\n"
-"$msleep(25);\n"
-"/*foo(1000000);$print(foo(2000000));*/"
+"$msleep(35);\n"
+"foo(1000000);$print(foo(2000000));"
 "for(var i=6; i<=10;i++) {\n\
     task1('go'+i, function (err, data) {\n\
         if (err == null) $print(data);\n\

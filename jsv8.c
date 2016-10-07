@@ -109,13 +109,12 @@ int js_gc(js_vm *vm) {
     return args.weak_counter;
 }
 
-js_handle *choose_coro(chan ch, int64_t ddline) {
-    js_handle *t = NULL;
-    mill_sleep(ddline);
+void *choose_coro(chan ch) {
+    void *t = NULL;
     choose {
     in(ch, js_handle *, t1):
         t = t1;
-    deadline(ddline):
+    otherwise:
         t = NULL;
     end
     }
