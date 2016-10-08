@@ -24,6 +24,12 @@ testgo.o: $(TOPDIR)/jsv8.h $(TOPDIR)/jsdef.h testgo.c
 testgo: testgo.o $(TOPDIR)/libcv8.a
 	$(CC) -o $@ $^ $(LIBS)
 
+testgo2.o: $(TOPDIR)/jsv8.h $(TOPDIR)/jsdef.h testgo2.c
+	$(CC) $(CFLAGS) $(EXTRA_FLAGS) $(INCLUDES) -c testgo2.c
+
+testgo2: testgo2.o $(TOPDIR)/libcv8.a
+	$(CC) -o $@ $^ $(LIBS)
+
 SO_CFLAGS = -fPIC -Wall -c -g -I. -I$(TOPDIR)
 SO_LDFLAGS = -shared
 
