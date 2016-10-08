@@ -231,6 +231,14 @@ static int32_t pack(void *ptr, int fmt, Isolate *isolate, v8Value val) {
             return 4 + byte_length;
         }
         return InvalidValue;
+    case 'p': {
+        v8Object ptrObj = ToPtr(val);
+        if (! ptrObj.IsEmpty()) {
+            *((void **) ptr) = UnwrapPtr(ptrObj);
+            return sizeof (void *);
+        }
+    }
+        return InvalidValue;
     default:
         break;
     }
@@ -372,6 +380,10 @@ static v8Value unpack(void *ptr, char fmtc,
         v = String::NewFromUtf8(isolate, (char *) ptr);
         *pwidth = strlen((char *) ptr) + 1;
         break;
+    case 'p':
+        v = WrapPtr((js_vm *) isolate->GetData(0), ptr);
+        *pwidth = sizeof (void *);
+        break;
     case 'a': {
         int32_t byte_length = *((int32_t *) ptr);
         if (byte_length < 0) {
@@ -475,6 +487,10 @@ v8Object WrapPtr(js_vm *vm, void *ptr) {
     Isolate *isolate = vm->isolate;
     assert(Locker::IsLocked(isolate));
     EscapableHandleScope handle_scope(isolate);
+    if (!ptr) {
+        return handle_scope.Escape(v8Object::Cast(
+                v8Value::New(isolate, vm->nullptr_handle->handle)));
+    }
     v8ObjectTemplate templ =
         v8ObjectTemplate::New(isolate, vm->extptr_template);
     v8Object obj = templ->NewInstance(

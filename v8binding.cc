@@ -470,9 +470,9 @@ static void Malloc(const v8::FunctionCallbackInfo<v8::Value>& args) {
     void *ptr = emalloc(size);
     if (argc > 1 && args[1]->BooleanValue(context).FromJust())
         memset(ptr, '\0', size);
-    v8Object obj = WrapPtr(
+    v8Object ptrObj = WrapPtr(
             static_cast<js_vm*>(isolate->GetData(0)), ptr);
-    args.GetReturnValue().Set(obj);
+    args.GetReturnValue().Set(ptrObj);
 }
 
 static void CallForeignFunc(

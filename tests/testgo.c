@@ -21,7 +21,7 @@ void js_panic(js_vm *vm) {
 }
 #define CHECK(rc, vm) if(!rc) js_panic(vm)
 
-static char resp[] = "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nOk\n";
+//static char resp[] = "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nOk\n";
 
 coroutine void write_response(js_vm *vm, js_handle *cr, js_handle *hin) {
 //    mill_fd csock = js_topointer(hin);
@@ -30,7 +30,9 @@ coroutine void write_response(js_vm *vm, js_handle *cr, js_handle *hin) {
     assert(csock);
     js_reset(h1);
 
-    char *ptr = resp;
+//    char *ptr = resp;
+    js_handle *h2 = js_get(hin, "data");
+    const char *ptr = js_tostring(h2);
     int total = strlen(ptr);
     int rc;
 again:
@@ -49,6 +51,7 @@ finish:
     mill_close(csock, 1);   // XXX: close in JS?
     /* js_gosend(cr, js_int32(vm, 1)); */
     js_godone(cr);
+    js_reset(h2);
 }
 
 
@@ -78,7 +81,7 @@ coroutine void read_request(js_vm *vm, js_handle *cr, js_handle *hin) {
 }
 
 static char script[] = "\
-$go(listen_and_serve, null, function (err, csock) {\n\
+$go(listen_and_accept, null, function (err, csock) {\n\
         if (err !== null) {\n\
             $print(err);\n\
             return;\n\
@@ -100,7 +103,7 @@ $go(listen_and_serve, null, function (err, csock) {\n\
 });";
 
 
-coroutine void listen_and_serve(js_vm *vm, js_handle *cr, js_handle *hin) {
+coroutine void listen_and_accept(js_vm *vm, js_handle *cr, js_handle *hin) {
     ipaddr address;
     int rc = iplocal(&address, NULL, 5555, 0);
     assert(rc == 0);
@@ -117,9 +120,9 @@ coroutine void listen_and_serve(js_vm *vm, js_handle *cr, js_handle *hin) {
 
 
 void setup(js_vm *vm) {
-    js_handle *hcr = js_go(vm, listen_and_serve);
+    js_handle *hcr = js_go(vm, listen_and_accept);
     assert(hcr);
-    js_set(JSGLOBAL(vm), "listen_and_serve", hcr);
+    js_set(JSGLOBAL(vm), "listen_and_accept", hcr);
     js_reset(hcr);
 
     hcr = js_go(vm, read_request);
