@@ -18,10 +18,10 @@ testjs.o: $(TOPDIR)/jsv8.h $(TOPDIR)/jsdef.h testjs.c
 testjs: testjs.o $(TOPDIR)/libcv8.a
 	$(CC) -o $@ $^ $(LIBS)
 
-apache_serve.o: $(TOPDIR)/jsv8.h $(TOPDIR)/jsdef.h apache_serve.c
-	$(CC) $(CFLAGS) $(EXTRA_FLAGS) $(INCLUDES) -c apache_serve.c
+testgo.o: $(TOPDIR)/jsv8.h $(TOPDIR)/jsdef.h testgo.c
+	$(CC) $(CFLAGS) $(EXTRA_FLAGS) $(INCLUDES) -c testgo.c
 
-apache_serve: apache_serve.o $(TOPDIR)/libcv8.a
+testgo: testgo.o $(TOPDIR)/libcv8.a
 	$(CC) -o $@ $^ $(LIBS)
 
 SO_CFLAGS = -fPIC -Wall -c -g -I. -I$(TOPDIR)

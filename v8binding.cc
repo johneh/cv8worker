@@ -110,10 +110,11 @@ static void Panic(Isolate *isolate, TryCatch *try_catch) {
 ////////////////////////////////// Coroutine //////////////////////////////////
 enum {
     GoError = (1 << 0),
+    GoDontResetOut = (1 << 1)
 };
 
 struct GoCallback {
-    js_handle *callback;
+    js_handle *crp;
     js_handle *data;
     int flags;
 };
@@ -134,7 +135,7 @@ static v8Object NewGo(js_vm *vm, void *fptr) {
 static v8Object ToGo(v8Value v) {
     if (v->IsObject()) {
         v8Object cr = v8Object::Cast(v);
-        if (cr->InternalFieldCount() == 2
+        if (cr->InternalFieldCount() == 3
             && (V8GO == static_cast<int>(reinterpret_cast<uintptr_t>(
                     cr->GetAlignedPointerFromInternalField(0)) >> 2))
         )
@@ -171,7 +172,7 @@ coroutine static void start_go(mill_pipe inq) {
         assert(hcr->type == V8GO);
         Fngo fn = reinterpret_cast<Fngo>(hcr->ptr);
         hcr->ptr = nullptr; // may be used by js_tostring() etc.
-        go(fn(hcr->vm, hcr, hcr->hp->hp));
+        go(fn(hcr->vm, hcr, hcr->hp));
     }
 }
 
@@ -195,10 +196,6 @@ static void send_go(js_vm *vm, js_handle *hcr) {
     if (rc == -1) {
         // FIXME
     }
-#ifdef MICRORUN
-    if (vm->ncoro > 1)
-        vm->isolate->RunMicrotasks();
-#endif
 }
 
 // $go(coro, input [, callback])
@@ -222,21 +219,30 @@ static void Go(const FunctionCallbackInfo<Value>& args) {
 
     v8Object cr = CloneGo(vm, cr0);
     hcr = make_handle(vm, cr, V8GO);
+
+    cr->SetInternalField(2, args[2]);
+
     hcr->ptr = v8External::Cast(cr->GetInternalField(1))->Value();
     vm->ncoro++;
-    hcr->hp = make_handle(vm, args[2], V8FUNC);
-
-    // Kludge: Use unused js_handle field of V8FUNC for the input handle.
     js_handle *hin = make_handle(vm, args[1], V8UNKNOWN);
-    if (hin->type == V8STRING)
+
+    // Perform conversions now to avoid lock contention.
+    switch (hin->type) {
+    case V8STRING:
         (void) js_tostring(hin);
-    // FIXME also number, int32 ..
+        break;
+    case V8EXTPTR:
+        (void) js_topointer(hin);
+        break;
+    case V8NUMBER:
+        (void) js_tonumber(hin);
+        break;
+    default:
+        break;
+    }
+    hcr->hp = hin;
 
-    hcr->hp->hp = hin;
-
-    DPRINT("[[ Go: Unlocking locker ]]\n");
-
-    Unlocker unlocker(isolate);
+    /* Unlocker unlocker(isolate); */
 
     }   // end V8 scope
 
@@ -250,7 +256,9 @@ static void RunGoCallback(js_vm *vm, GoCallback *cb) {
     if (!cb->data) {
         /* From js_godone() */
         vm->ncoro--;
-        js_reset(cb->callback);
+        /* free input handle */
+        js_reset(cb->crp->hp);
+        js_reset(cb->crp);
         delete cb;
         return;
     }
@@ -260,9 +268,11 @@ static void RunGoCallback(js_vm *vm, GoCallback *cb) {
     v8Context context = v8Context::New(isolate, vm->context);
     Context::Scope context_scope(context);
 
-    v8Function func = v8Function::Cast(v8Value::New(isolate, cb->callback->handle));
+    v8Object cr = v8Object::Cast(v8Value::New(isolate, cb->crp->handle));
+    v8Function func = v8Function::Cast(cr->GetInternalField(2));
     v8Value outval = v8Value::New(isolate, cb->data->handle);
-    js_reset(cb->data);
+    if (cb->data != cb->crp && !(cb->flags & GoDontResetOut))
+        js_reset(cb->data);
 
     v8Value args[2];
     if (cb->flags & GoError) {
@@ -281,54 +291,20 @@ static void RunGoCallback(js_vm *vm, GoCallback *cb) {
     }
 }
 
-// XXX: unsafe for V8/C++ scope .. 
 static void WaitFor(js_vm *vm) {
-    Isolate *isolate = vm->isolate;
-    isolate->SetMicrotasksPolicy(v8::MicrotasksPolicy::kExplicit);
     while (vm->ncoro > 0) {
         DPRINT("[[ WaitFor: %d unfinished coroutines. ]]\n", vm->ncoro);
         GoCallback *cb = chr(vm->ch, GoCallback *);
         assert(cb);
         RunGoCallback(vm, cb);
     }
-    isolate->SetMicrotasksPolicy(v8::MicrotasksPolicy::kAuto);
-}
-
-// XXX: unsafe for V8/C++ scope ..
-static void v8Microtask(void *data) {
-    js_vm *vm = (js_vm *) data;
-    Isolate *isolate = vm->isolate;
-    isolate->SetMicrotasksPolicy(v8::MicrotasksPolicy::kExplicit);
-    while (vm->ncoro > 0) {
-        GoCallback *cb = reinterpret_cast<GoCallback *>(choose_coro(vm->ch));
-        if (cb) {
-            DPRINT("[[ Running go callback in microtask (ncoro = %d) ]]\n", vm->ncoro);
-            RunGoCallback(vm, cb);
-        } else
-            break;
-    }
-    isolate->SetMicrotasksPolicy(v8::MicrotasksPolicy::kAuto);
-#if 0
-    if (vm->ncoro > 0) {
-        Unlocker unlocker(isolate);
-    }
-#endif
-}
-
-// Callback triggered after microtasks are run. Callback will trigger even
-// if microtasks were attempted to run, but the microtasks queue was empty
-// and no single microtask was actually executed.
-
-static void v8MicrotasksCompleted(Isolate *isolate) {
-    // Reinstall the Microtask.
-    isolate->EnqueueMicrotask(v8Microtask, isolate->GetData(0));
 }
 
 static void MakeGoTemplate(js_vm *vm) {
     Isolate *isolate = vm->isolate;
     HandleScope handle_scope(isolate);
     v8ObjectTemplate templ = ObjectTemplate::New(isolate);
-    templ->SetInternalFieldCount(2);
+    templ->SetInternalFieldCount(3);
     vm->go_template.Reset(isolate, templ);
 }
 
@@ -354,23 +330,15 @@ int js_gosend_(js_handle *hcr, js_handle *hout, int iserr) {
     }
     if (!hout)
         hout = vm->null_handle;
-    else if (hout == hcr->hp->hp && (hout->flags & PERM_HANDLE) == 0) {
-        /* TODO: use a flag in GoCallback instead */
-        js_handle *h1 = new js_handle;
-        LOCK_SCOPE(isolate)
-        h1->handle.Reset(isolate, v8Value::New(isolate, hout->handle));
-        h1->type = hout->type;
-        h1->flags = 0;
-        h1->ptr = nullptr;
-        hout = h1;
-    }
 
     GoCallback *cb = new GoCallback;
-    cb->callback = hcr->hp;
+    cb->crp = hcr;
     cb->data = hout;
     cb->flags = 0;
     if (iserr)
         cb->flags |= GoError;
+    if (hout == hcr->hp)
+        cb->flags |= GoDontResetOut;
 
     // Coroutine is running in a different thread.
     int rc = mill_pipesend(vm->outq, &cb);
@@ -387,15 +355,11 @@ int js_godone(js_handle *hcr) {
         return 0;
     }
 
-    /* free input handle */
-    js_reset(hcr->hp->hp);
-
     GoCallback *cb = new GoCallback;
-    cb->callback = hcr->hp;
+    cb->crp = hcr;
     cb->data = nullptr;
     int rc = mill_pipesend(vm->outq, &cb);
     assert(rc == 0);
-    js_reset(hcr);
     return 1;
 }
 
@@ -1009,18 +973,6 @@ js_handle *js_pointer(js_vm *vm, void *ptr) {
     return h;
 }
 
-#if 0
-// XXX: returns NULL if not V8EXTPTR!
-static void *ExternalPtrValue(js_vm *vm, v8Value v) {
-    if (!v->IsObject())
-        return nullptr;
-    v8Object obj = v8Object::Cast(v);
-    if (GetCtypeId(vm, obj) == V8EXTPTR)
-        return v8External::Cast(obj->GetInternalField(1))->Value();
-    return nullptr;
-}
-#endif
-
 js_handle *js_cfunc(js_vm *vm, const struct cffn_s *func_wrap) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate);
@@ -1558,10 +1510,6 @@ static void CreateIsolate(js_vm *vm) {
     LOCK_SCOPE(isolate)
 
     assert(isolate->GetCurrentContext().IsEmpty());
-
-    isolate->AddMicrotasksCompletedCallback(v8MicrotasksCompleted);
-    isolate->EnqueueMicrotask(v8Microtask, vm);
-
     vm->isolate = isolate;
 
     js_handle *hargs = new js_handle[MAXARGS];
