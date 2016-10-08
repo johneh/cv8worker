@@ -274,6 +274,12 @@ void testpack(js_vm *vm) {
     /* p1 can be garbage collected. */
     weak_counter = js_gc(vm);
     assert(weak_counter == 1);
+
+    r1 = js_eval(vm, "$nullptr.packSize('idxs', 1, 1.0, 'apple');");
+    CHECK(r1, vm);
+    int pack_size = js_toint32(r1);
+    assert(pack_size == 19);
+    js_reset(r1);
 }
 
 

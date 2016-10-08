@@ -159,6 +159,110 @@ enum {
     InvalidValue
 };
 
+static int32_t packsize(int fmt, Isolate *isolate, v8Value val) {
+    switch (fmt) {
+    case 'c':
+    case 'b':
+    case 'B':
+    case 'x':
+        return 1;
+    case 'h':   /* short */
+    case 'H':   /* unsigned short */
+        return 2;
+    case 'i':   /* int32_t (native int) */
+    case 'I':   /* uint32_t (native unsigned int) */
+        return 4;
+    case 'l':   /* native long */
+        return sizeof (long);
+    case 'L':   /* native unsigned long */
+        return sizeof (unsigned long);
+    case 'j':   /* int64_t */
+    case 'J':   /* uint64_t */
+    case 'd':
+        return 8;
+    case 's': {
+        /* nul-terminated string */
+        v8String s = val->ToString(
+                    isolate->GetCurrentContext()).ToLocalChecked();
+        return s->Utf8Length() + 1;
+    }
+    case 'a':   /* arraybuffer, typedarray or dataview */
+        if (val->IsArrayBufferView()) {
+            v8ArrayBufferView av = v8ArrayBufferView::Cast(val);
+            size_t byte_length = av->ByteLength();
+            if (byte_length + 4 > INT32_MAX)
+                return InvalidValue;
+            return 4 + byte_length;
+        }
+        if (val->IsArrayBuffer()) {
+            ArrayBuffer::Contents c = v8ArrayBuffer::Cast(val)->GetContents();
+            size_t byte_length = c.ByteLength();
+            if (byte_length + 4 > INT32_MAX)
+                return InvalidValue;
+            return 4 + byte_length;
+        }
+        return InvalidValue;
+    case 'p':
+        return sizeof (void *);
+    default:
+        break;
+    }
+    return BadFmtSpec;
+}
+
+static int32_t packsize_n(char *fmt,
+            const FunctionCallbackInfo<Value>& args) {
+    int c, nexti = 1;
+    int argc = args.Length();
+    int32_t sz, total = 0;
+    while ((c = *fmt)) {
+        if (c >= '0' && c <= '9') {
+            /* " .. COUNTx .." */
+            int count = c - '0';
+            while ((c = *++fmt) && c >= '0' && c <= '9') {
+                count = count * 10 + c - '0';
+            }
+            if (c != 'x')
+                return BadFmtSpec;
+            total += count;
+            fmt++;
+            continue;
+        }
+        if (c == 'x') {  /* same as "1x" */
+            total++;
+            fmt++;
+            continue;
+        }
+        if (argc < (nexti + 1))
+            return NotEnoughArgs;
+        sz = packsize(*fmt, args.GetIsolate(), args[nexti]);
+        if (sz < 0)
+            return sz;
+        total += sz;
+        fmt++;
+        nexti++;
+    }
+    return total;
+}
+
+// Use $nullptr as the object:
+//  $nullptr.packSize(format, value1, ... )
+static void PackSize(const FunctionCallbackInfo<Value>& args) {
+    int argc = args.Length();
+    Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
+    ThrowNotEnoughArgs(isolate, argc < 1);
+    //  v8Object obj = args.Holder(); - Ignore
+    int32_t sz = -1;
+    String::Utf8Value fmt_str(args[0]);
+    if (fmt_str.length() > 0)
+        sz = packsize_n(*fmt_str, args);
+    if (sz < 0)
+        ThrowError(isolate,
+            "packsize: invalid format or not enough arguments");
+    args.GetReturnValue().Set(Integer::New(isolate, sz));
+}
+
 static int32_t pack(void *ptr, int fmt, Isolate *isolate, v8Value val) {
     switch (fmt) {
     case 'c': {
@@ -301,6 +405,7 @@ static void Pack(const FunctionCallbackInfo<Value>& args) {
     int32_t sz = 0;
 
     if (argc > 1) {
+        sz = -1;
         String::Utf8Value fmt_str(args[1]);
         if (fmt_str.length() > 0)
             sz = pack_n((char *)ptr, *fmt_str, args);
@@ -533,6 +638,8 @@ void MakeCtypeProto(js_vm *vm) {
                 FunctionTemplate::New(isolate, Pack));
     ptr_templ->Set(v8_str(isolate, "unpack"),
                 FunctionTemplate::New(isolate, Unpack));
+    ptr_templ->Set(v8_str(isolate, "packSize"),
+                FunctionTemplate::New(isolate, PackSize));
 
     // Create the one and only proto instance.
     v8Object ptr_proto = ptr_templ
