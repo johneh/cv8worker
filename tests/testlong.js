@@ -2,10 +2,10 @@ var i1, i2, i3;
 i1 = $long("123456789");
 $print($lcntl(i1));
 $print('issigned =', $lcntl(i1, $long.isInt64));
-$print('iszero =', $lcntl(i1, $long.isZero));
+$print('iszero =', $lcntl(i1, $long.not));
 i3 = $long(0, true);
 $print('issigned =', $lcntl(i3, $long.isInt64));
-$print('iszero =', $lcntl(i3, $long.isZero));
+$print('iszero =', $lcntl(i3, $long.not));
 
 i2 = $long("123456789", true);
 $print($lcntl(i1, $long.toString));

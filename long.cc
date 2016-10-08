@@ -128,6 +128,7 @@ enum LongCmd {
     LONG_LOW32U,
     LONG_HIGH32U,
     LONG_ISZERO,
+    LONG_COMPL,
     LONG_EQUAL,
     LONG_PACK,
     LONG_UNPACK
@@ -145,7 +146,8 @@ static struct lcmd_s {
     { (char *) "high32", LONG_HIGH32 },
     { (char *) "low32u", LONG_LOW32U },
     { (char *) "high32u", LONG_HIGH32U },
-    { (char *) "isZero", LONG_ISZERO },
+    { (char *) "not", LONG_ISZERO },
+    { (char *) "compl", LONG_COMPL },
     { (char *) "eq", LONG_EQUAL },
     { (char *) "pack", LONG_PACK },
     { (char *) "unpack", LONG_UNPACK },
@@ -217,6 +219,14 @@ void LongCntl(const v8::FunctionCallbackInfo<v8::Value>& args) {
     case LONG_ISZERO:
         args.GetReturnValue().Set(
                     Boolean::New(isolate, !ival.i64));
+        break;
+    case LONG_COMPL: {
+        js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
+        if (issigned)
+            args.GetReturnValue().Set(Int64(vm, ~ival.i64));
+        else
+            args.GetReturnValue().Set(UInt64(vm, ~ival.u64));
+    }
         break;
     case LONG_EQUAL: {
         union integer64_u ival2;
