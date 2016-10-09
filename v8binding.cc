@@ -1065,8 +1065,11 @@ int32_t js_toint32(js_handle *h) {
 
 void *js_topointer(js_handle *h) {
     void *ptr;
-    if (h->type == V8EXTPTR && (h->flags & PTR_HANDLE)) {
-        return h->ptr;
+    if (h->type == V8EXTPTR) {
+        ptr = h->ptr;
+        if (ptr && (h->flags & PTR_HANDLE)) {
+            return ptr;
+        }
     }
     js_vm *vm = h->vm;
     Isolate *isolate = vm->isolate;
@@ -1078,6 +1081,7 @@ void *js_topointer(js_handle *h) {
         ptr = v8External::Cast(
                     v8Object::Cast(v1)->GetInternalField(1)
                 )->Value();
+        h->flags &= ~VALUE_MASK;
         h->ptr = ptr;
         h->flags |= PTR_HANDLE;
     } else if (v1->IsArrayBuffer()) {
