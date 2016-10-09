@@ -108,6 +108,7 @@ static void Panic(Isolate *isolate, TryCatch *try_catch) {
 }
 
 ////////////////////////////////// Coroutine //////////////////////////////////
+#define GOROUTINE_INTERNAL_FIELD_COUNT 3
 enum {
     GoError = (1 << 0),
     GoDontResetOut = (1 << 1)
@@ -135,7 +136,7 @@ static v8Object NewGo(js_vm *vm, void *fptr) {
 static v8Object ToGo(v8Value v) {
     if (v->IsObject()) {
         v8Object cr = v8Object::Cast(v);
-        if (cr->InternalFieldCount() == 3
+        if (cr->InternalFieldCount() == GOROUTINE_INTERNAL_FIELD_COUNT
             && (V8GO == static_cast<int>(reinterpret_cast<uintptr_t>(
                     cr->GetAlignedPointerFromInternalField(0)) >> 2))
         )
@@ -171,7 +172,7 @@ coroutine static void start_go(mill_pipe inq) {
             break;
         assert(hcr->type == V8GO);
         Fngo fn = reinterpret_cast<Fngo>(hcr->ptr);
-        hcr->ptr = nullptr; // may be used by js_tostring() etc.
+        hcr->ptr = nullptr;
         go(fn(hcr->vm, hcr, hcr->hp));
     }
 }
@@ -276,7 +277,8 @@ static void RunGoCallback(js_vm *vm, GoCallback *cb) {
 
     v8Value args[2];
     if (cb->flags & GoError) {
-        args[0] = outval;
+        args[0] = Exception::Error(
+                    outval->ToString(context).ToLocalChecked());
         args[1] = v8::Null(isolate);
     } else {
         args[0] = v8::Null(isolate);
@@ -304,7 +306,7 @@ static void MakeGoTemplate(js_vm *vm) {
     Isolate *isolate = vm->isolate;
     HandleScope handle_scope(isolate);
     v8ObjectTemplate templ = ObjectTemplate::New(isolate);
-    templ->SetInternalFieldCount(3);
+    templ->SetInternalFieldCount(GOROUTINE_INTERNAL_FIELD_COUNT);
     vm->go_template.Reset(isolate, templ);
 }
 
@@ -518,7 +520,7 @@ static void CallForeignFunc(
         } else {
             assert(!(hret->flags & ARG_HANDLE)); // XXX: should bail out.
             retv = v8Value::New(isolate, hret->handle);
-            if (hret->type == V8ERROR)  // From js_error().
+            if (hret->flags & ERROR_HANDLE)  // From js_error().
                 err = 1;
             js_reset(hret);
         }
@@ -531,7 +533,8 @@ static void CallForeignFunc(
             h->flags = ARG_HANDLE;
         }
         if (err)
-            isolate->ThrowException(retv);
+                isolate->ThrowException(retv->ToString(
+                    isolate->GetCurrentContext()).ToLocalChecked());
         else
             args.GetReturnValue().Set(retv);
     }
@@ -807,15 +810,18 @@ js_handle *js_get(js_handle *hobj, const char *key) {
 }
 
 int js_set(js_handle *hobj, const char *key, js_handle *hval) {
-    Isolate *isolate = hobj->vm->isolate;
+    js_vm *vm = hobj->vm;
+    Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate)
-    v8Context context = v8Context::New(isolate, hobj->vm->context);
+    v8Context context = v8Context::New(isolate, vm->context);
     v8Value v1 =  v8Value::New(isolate, hobj->handle);
     if (!v1->IsObject()) {
-        js_set_errstr(hobj->vm, "js_set: object argument expected");
+        js_set_errstr(vm, "js_set: object argument expected");
         return 0;
     }
     v8Object obj = v8Object::Cast(v1);
+    if (!hval)
+        hval = vm->null_handle;
     return obj->Set(context, v8_str(isolate, key),
                 v8Value::New(isolate, hval->handle)).FromJust();
 }
@@ -848,7 +854,6 @@ js_handle *js_geti(js_handle *hobj, unsigned index) {
     LOCK_SCOPE(isolate)
     js_vm *vm = hobj->vm;
     v8Context context = v8Context::New(isolate, vm->context);
-    // Context::Scope context_scope(context);
     v8Value v1 = v8Value::New(isolate, hobj->handle);
     if (!v1->IsObject()) {
         js_set_errstr(vm, "js_geti: object argument expected");
@@ -861,15 +866,17 @@ js_handle *js_geti(js_handle *hobj, unsigned index) {
 }
 
 int js_seti(js_handle *hobj, unsigned index, js_handle *hval) {
-    Isolate *isolate = hobj->vm->isolate;
+    js_vm *vm = hobj->vm;
+    Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate)
-    v8Context context = v8Context::New(isolate, hobj->vm->context);
-    // Context::Scope context_scope(context);
+    v8Context context = v8Context::New(isolate, vm->context);
     v8Value v1 = v8Value::New(isolate, hobj->handle);
     if (!v1->IsObject()) {
-        js_set_errstr(hobj->vm, "js_seti: object argument expected");
+        js_set_errstr(vm, "js_seti: object argument expected");
         return 0;
     }
+    if (!hval)
+        hval = vm->null_handle;
     v8Object obj = v8Object::Cast(v1);
     return obj->Set(context, index,
                 v8Value::New(isolate, hval->handle)).FromJust();
@@ -951,21 +958,13 @@ void *js_externalize(js_handle *h) {
     return ptr;
 }
 
-// JS exception object.
-js_handle *js_error(js_vm *vm, const char *message) {
-    Isolate *isolate = vm->isolate;
-    LOCK_SCOPE(isolate)
-    return make_handle(vm, Exception::Error(
-                    v8_str(isolate, message)), V8ERROR);
-}
-
 js_handle *js_pointer(js_vm *vm, void *ptr) {
+    if (!ptr)
+        return vm->nullptr_handle;
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate);
     v8Context context = v8Context::New(isolate, vm->context);
     Context::Scope context_scope(context);
-    if (!ptr)
-        return vm->nullptr_handle;
     js_handle *h = make_handle(vm, WrapPtr(vm, ptr), V8EXTPTR);
     h->ptr = ptr;
     h->flags |= PTR_HANDLE;
@@ -987,6 +986,15 @@ js_handle *js_cfunc(js_vm *vm, const struct cffn_s *func_wrap) {
     fnObj->SetInternalField(1, External::New(isolate, (void *)func_wrap));
     fnObj->SetPrototype(v8Value::New(isolate, vm->ctype_proto));
     return make_handle(vm, fnObj, V8EXTFUNC);
+}
+
+// JS error return for C function call (See CallForeignFunc()).
+js_handle *js_error(js_vm *vm, const char *message) {
+    Isolate *isolate = vm->isolate;
+    LOCK_SCOPE(isolate)
+    js_handle *h =  js_string(vm, message, -1);
+    h->flags |= ERROR_HANDLE;
+    return h;
 }
 
 const char *js_tostring(js_handle *h) {
@@ -1014,7 +1022,7 @@ const char *js_tostring(js_handle *h) {
 }
 
 double js_tonumber(js_handle *h) {
-    if (h->type == V8NUMBER && (h->flags & DBL_HANDLE) != 0) {
+    if (h->type == V8NUMBER && (h->flags & DBL_HANDLE)) {
         return h->d;
     }
     Isolate *isolate = h->vm->isolate;
@@ -1033,8 +1041,11 @@ double js_tonumber(js_handle *h) {
 }
 
 int32_t js_toint32(js_handle *h) {
-    if (h->type == V8NUMBER && (h->flags & INT32_HANDLE) != 0) {
-        return h->i;
+    if (h->type == V8NUMBER) {
+        if (h->flags & INT32_HANDLE)
+            return h->i;
+        if (h->flags & DBL_HANDLE)
+            return h->d;
     }
     Isolate *isolate = h->vm->isolate;
     LOCK_SCOPE(isolate)
@@ -1054,11 +1065,8 @@ int32_t js_toint32(js_handle *h) {
 void *js_topointer(js_handle *h) {
     void *ptr;
     if (h->type == V8EXTPTR && (h->flags & PTR_HANDLE)) {
-        ptr = h->ptr;
-        if (ptr)
-            return ptr;
+        return h->ptr;
     }
-
     js_vm *vm = h->vm;
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate)
@@ -1087,7 +1095,7 @@ void js_reset(js_handle *h) {
     Locker locker(isolate);
 
     if ((h->flags & (PERM_HANDLE|ARG_HANDLE|WEAK_HANDLE)) == 0) {
-        Isolate::Scope isolate_scope(isolate); // more than one isolate in worker ???
+        Isolate::Scope isolate_scope(isolate); // XXX: ?
         h->handle.Reset();
         if (h->flags & STR_HANDLE)
             free(h->stp);

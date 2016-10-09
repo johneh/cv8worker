@@ -44,6 +44,7 @@ extern const js_handle *js_null(js_vm *vm);
 
 extern js_handle *js_pointer(js_vm *vm, void *ptr);
 extern js_handle *js_cfunc(js_vm *vm, const js_ffn *func_wrap);
+extern js_handle *js_error(js_vm *vm, const char *message);
 
 extern void js_reset(js_handle *h);
 extern void js_dispose(js_handle *h, Fnfree free_func);
@@ -70,7 +71,6 @@ extern int js_gosend_(js_handle *hcr, js_handle *hout, int iserr);
 
 extern int js_godone(js_handle *hcr);
 
-extern js_handle *js_error(js_vm *vm, const char *message);
 extern const char *js_errstr(js_vm *vm);
 
 extern int js_gc(js_vm *vm);

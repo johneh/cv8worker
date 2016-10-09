@@ -656,6 +656,7 @@ public:
     void EndSourceFileAction() override {
         fprintf(stdout, "\nstatic js_ffn fntab_[] = {\n%s{0}\n};\n", m_fns.c_str());
         fprintf(stdout, "static const char source_str_[] = \"(function(){\\\n");
+        fprintf(stdout, "var _tags = {}, _types = {}, _s;\\\n");
         for (unsigned k = 0; k < m_enums.size(); k++) {
             CEnum *ce = m_enums[k];
             if (ce->items.size() == 0)  // not defined
@@ -668,33 +669,23 @@ public:
                     name = name + stripPrefix.size();
             }
 #if 0
-            // enum type as object with enumerators as properties
-            fprintf(stdout, "this.%s = {\\\n", name);
+            // enum type as tag object with enumerators as properties.
+            // FIXME -- seperate _tags and _types entries for enum name and typedef
+            fprintf(stdout, "_tags['%s'] = {\\\n", name);
             for (unsigned i = 0; i < ce->items.size(); i++) {
                 fprintf(stdout, "%s : %d,\\\n",
                     ce->items[i]->name.c_str(), ce->items[i]->value);
             }
 
             fprintf(stdout, "};\\\n");
-#endif
+#else
             for (unsigned i = 0; i < ce->items.size(); i++) {
                 fprintf(stdout, "this.%s = %d;\\\n",
                     ce->items[i]->name.c_str(), ce->items[i]->value);
             }
-        }
-
-#if 0
-        fprintf(stdout, "this['#records'] = {};\n");
-        for (unsigned k = 0; k < m_records.size(); k++) {
-            CRecord *r = m_records[k];
-            if (r->offsets != "")
-                fprintf(stdout, "this['#records']['%s'] = %s;\n",
-                                r->recName.c_str(), r->offsets.c_str());
-            // << ": " << r->typedefName << "\n";
-        }
 #endif
+        }
 
-        fprintf(stdout, "var _s;\\\n");
         for (unsigned k = 0; k < m_records.size(); k++) {
             CRecord *r = m_records[k];
             if (r->offsets == "")
@@ -704,12 +695,12 @@ public:
             fprintf(stdout, "_s = %s; _s['#size'] = %d;\\\n",
                             r->offsets.c_str(), r->size);
             if (!r->isanon)
-                fprintf(stdout, "this.%s = _s;\\\n", r->recName.c_str());
+                fprintf(stdout, "_tags['%s'] = _s;\\\n", r->recName.c_str());
             if (r->typedefName != "")
-                fprintf(stdout, "this.%s = _s;\\\n", r->typedefName.c_str());
+                fprintf(stdout, "_types['%s'] = _s;\\\n", r->typedefName.c_str());
         }
 
-        fprintf(stdout, "});\";\n\n");
+        fprintf(stdout, "this['#tags'] = _tags;this['#types'] = _types;});\";\n\n");
 
         fprintf(stdout, "int JS_LOAD(js_vm *vm, js_val vobj) {\n");
         fprintf(stdout, "js_dl = dl_;\n");

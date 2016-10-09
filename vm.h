@@ -56,6 +56,7 @@ struct js_handle_s {
 #define WEAK_HANDLE (1 << 6)
 #define FREE_EXTWRAP    (1 << 7)
 #define FREE_DLWRAP (1 << 8)
+#define ERROR_HANDLE    (1 << 9)
 
     union {
         double d;
