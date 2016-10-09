@@ -98,7 +98,7 @@ coroutine void read_request(js_vm *vm, js_handle *cr, js_handle *hin) {
         if (num_bytes_read > 0)
             msg_length += num_bytes_read;
         else if (num_bytes_read == 0 || errno == ECONNRESET) {
-            js_goerr(cr, js_string(vm, "error reading from socket", -1));
+            js_gosend(cr, js_error(vm, "error reading from socket"));
             mill_close(csock, 1);   // XXX: for now
             break;
         } else {
@@ -145,7 +145,7 @@ coroutine void listen_and_accept(js_vm *vm, js_handle *cr, js_handle *hin) {
     while(1) {
         mill_fd csock = tcpaccept(lsock, -1);
         if (! csock)
-            js_goerr(cr, js_string(vm, strerror(errno), -1));
+            js_gosend(cr, js_error(vm, strerror(errno)));
         else
             js_gosend(cr, js_pointer(vm, csock));
     }

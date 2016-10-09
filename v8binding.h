@@ -20,7 +20,6 @@ enum js_code {
     V8OBJECT,
     V8ARRAY,
     V8FUNC,
-    V8ERROR,
 };
 
 enum js_cmd {

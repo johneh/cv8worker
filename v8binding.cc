@@ -322,7 +322,7 @@ js_handle *js_go(js_vm *vm, Fngo fptr) {
 // $go(coro, in, callback)
 //  Does not require acquiring a locker object.
 
-int js_gosend_(js_handle *hcr, js_handle *hout, int iserr) {
+int js_gosend(js_handle *hcr, js_handle *hout) {
     js_vm *vm = hcr->vm;
     Isolate *isolate = vm->isolate;
     if (hcr->type != V8GO) {
@@ -337,7 +337,7 @@ int js_gosend_(js_handle *hcr, js_handle *hout, int iserr) {
     cb->crp = hcr;
     cb->data = hout;
     cb->flags = 0;
-    if (iserr)
+    if (hout->flags & ERROR_HANDLE)
         cb->flags |= GoError;
     if (hout == hcr->hp)
         cb->flags |= GoDontResetOut;
@@ -988,7 +988,8 @@ js_handle *js_cfunc(js_vm *vm, const struct cffn_s *func_wrap) {
     return make_handle(vm, fnObj, V8EXTFUNC);
 }
 
-// JS error return for C function call (See CallForeignFunc()).
+// JS error return for C function call (See CallForeignFunc())
+//  and error argument in $go callbacks (See js_godone()).
 js_handle *js_error(js_vm *vm, const char *message) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate)
