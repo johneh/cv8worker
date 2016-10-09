@@ -19,6 +19,9 @@
                     modulePath += (':' + loader.path);
             }
             loader._defaultPath = modulePath;
+
+            this.DLL = dlloader();
+
         } else
             modulePath = this.__path;	// this === parent module
 
@@ -116,6 +119,71 @@
             }
         }
         return null;
+    };
+
+    var dlloader = function () {
+        var dll = function (libname) {
+            libname = libname + '';
+            let lib;
+            try {
+                lib = this._lib = $load(libname); // null if path has no slash ???
+            } catch (e) {
+                lib = null;
+            }
+            if (lib === null || ! (lib instanceof Object)
+                    || ! lib.hasOwnProperty('#types')
+                    || ! lib.hasOwnProperty('#tags')
+            )
+                throw new Error('DLL: error loading library \'' + libname + '\'');
+            this._types = lib['#types'];
+            this._tags = lib['#tags'];
+            delete this._lib['#types'];
+            delete this._lib['#tags'];
+        };
+
+        dll.prototype.sizeof = function(s) {
+            s = s + '';
+            // try typedefs
+            if (this._types.hasOwnProperty(s)) {
+                let t = this._types[s];
+                if (t.hasOwnProperty('#size')) return t['#size'];
+            }
+            // try structs
+            if (this._tags.hasOwnProperty(s)) {
+                let t = this._tags[s];
+                if (t.hasOwnProperty('#size')) return t['#size'];
+            }
+            // throw ?
+        };
+
+        dll.prototype.offsetof = function (s, item) {
+            s = s + '';
+            let t = null;
+            if (this._types.hasOwnProperty(s)) {
+                t = this._types[s];
+            } else if (this._tags.hasOwnProperty(s)) {
+                t = this._tags[s];
+            }
+            if (t !== null) {
+                if (!item)
+                    return JSON.stringify(t, function (k, v) {
+                            if (k != '#size') return v;
+                        });
+                item = item + '';
+                if (item != '#size' && t.hasOwnProperty(item))
+                    return t[item];
+            }
+            // throw ?
+        };
+
+        Object.defineProperty(dll.prototype, "identifiers", {
+            get: function() {
+                    return this._lib;
+                }
+            }
+        );
+
+        return dll;
     };
 
     return load;

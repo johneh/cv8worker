@@ -250,7 +250,7 @@ static void Go(const FunctionCallbackInfo<Value>& args) {
     send_go(vm, hcr);
 }
 
-// Execute callback(err, data). Swallow any thrown exceptions.
+// Execute callback(err, data). Panic if any exception thrown.
 static void RunGoCallback(js_vm *vm, GoCallback *cb) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate)
@@ -290,6 +290,10 @@ static void RunGoCallback(js_vm *vm, GoCallback *cb) {
     func->Call(context->Global(), 2, args);
     if (try_catch.HasCaught()) {
         Panic(isolate, &try_catch);
+#if 0
+        char *errstr = GetExceptionString(isolate, &try_catch);
+        fprintf(stderr, "%s\n", errstr);
+#endif
     }
 }
 
