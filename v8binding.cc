@@ -1316,8 +1316,9 @@ static unsigned int to_uint(js_vm *vm, int arg_num, js_val argv) {
 
 static int64_t to_long(js_vm *vm, int arg_num, js_val argv) {
     v8Value v = ARGV;
-    if (IsInt64(v))
-        return GetInt64(v);
+    long64 i;
+    if (LongValue(v, &i))
+        return i.val.i64;
     if (! v->IsNumber() && ! v->IsBoolean()) {
         js_set_errstr(vm, "C-type argument is not a number");
         return 0;
@@ -1327,8 +1328,9 @@ static int64_t to_long(js_vm *vm, int arg_num, js_val argv) {
 
 static uint64_t to_ulong(js_vm *vm, int arg_num, js_val argv) {
     v8Value v = ARGV;
-    if (IsUInt64(v))
-        return GetUInt64(v);
+    long64 i;
+    if (LongValue(v, &i))
+        return i.val.u64;
     if (! v->IsNumber() && ! v->IsBoolean()) {
         js_set_errstr(vm, "C-type argument is not a number");
         return 0;

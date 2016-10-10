@@ -51,3 +51,16 @@ $print($lcntl(i1), $lcntl(i2));
 $print('isequal =', $lcntl(i1, $long.eq, i2));
 p.free();
 
+i1 = $long("-1");
+i2 = $long("1");
+i3 = $lcntl(i1, $long.and, i2);
+$print($lcntl(i3));
+
+i2 = $lcntl(i1, $long.lshift, 1);
+$print($lcntl(i2));
+i2 = $lcntl(i1, $long.rshift, 1);
+i3 = $lcntl(i1, $long.lrshift, 1);
+
+$print($lcntl(i2), $lcntl(i3));
+
+//$print(123 << 32);

@@ -50,42 +50,6 @@ v8Object UInt64(js_vm *vm, uint64_t ui64) {
     return handle_scope.Escape(obj);
 }
 
-bool IsInt64(v8Value v) {
-    if (v->IsObject()
-        && v8Object::Cast(v)->InternalFieldCount() == 2
-        && (V8INT64 == static_cast<int>(reinterpret_cast<uintptr_t>(
-                v8Object::Cast(v)->GetAlignedPointerFromInternalField(0)) >> 2))
-    )
-        return true;
-    return false;
-}
-
-int64_t GetInt64(v8Value v) {
-    return static_cast<int64_t>(
-            reinterpret_cast<intptr_t>(v8External::Cast(
-                    v8Object::Cast(v)->GetInternalField(1))->Value()
-            )
-    );
-}
-
-bool IsUInt64(v8Value v) {
-    if (v->IsObject()
-        && v8Object::Cast(v)->InternalFieldCount() == 2
-        && (V8UINT64 == static_cast<int>(reinterpret_cast<uintptr_t>(
-                v8Object::Cast(v)->GetAlignedPointerFromInternalField(0)) >> 2))
-    )
-        return true;
-    return false;
-}
-
-uint64_t GetUInt64(v8Value v) {
-    return static_cast<uint64_t>(
-            reinterpret_cast<uintptr_t>(v8External::Cast(
-                v8Object::Cast(v)->GetInternalField(1))->Value()
-            )
-    );
-}
-
 static inline void SetUInt64(v8Value v, uint64_t ui64) {
     v8Object obj = v8Object::Cast(v);
     obj->SetInternalField(1,
@@ -93,26 +57,29 @@ static inline void SetUInt64(v8Value v, uint64_t ui64) {
                 reinterpret_cast<void*>(static_cast<uintptr_t>(ui64))));
 }
 
-int LongValue(v8Value v, Long64 *val) {
+int LongValue(v8Value v, long64 *l) {
+    v8Object obj;
     if (v->IsObject()
-            && v8Object::Cast(v)->InternalFieldCount() == 2) {
+            && (obj = v8Object::Cast(v))->InternalFieldCount() == 2) {
         int id = static_cast<int>(reinterpret_cast<uintptr_t>(
-                v8Object::Cast(v)->GetAlignedPointerFromInternalField(0)) >> 2);
+                obj->GetAlignedPointerFromInternalField(0)) >> 2);
         if (id == V8INT64) {
-            val->i64 = static_cast<int64_t>(
+            l->val.i64 = static_cast<int64_t>(
                 reinterpret_cast<intptr_t>(v8External::Cast(
-                    v8Object::Cast(v)->GetInternalField(1))->Value()
+                    obj->GetInternalField(1))->Value()
                 )
             );
-            return V8INT64;
+            l->issigned = 1;
+            return 1;
         }
         if (id == V8UINT64) {
-            val->u64 = static_cast<uint64_t>(
+            l->val.u64 = static_cast<uint64_t>(
                 reinterpret_cast<uintptr_t>(v8External::Cast(
-                    v8Object::Cast(v)->GetInternalField(1))->Value()
+                    obj->GetInternalField(1))->Value()
                 )
             );
-            return V8UINT64;
+            l->issigned = 0;
+            return 1;
         }
     }
     return 0;
@@ -127,11 +94,18 @@ enum LongCmd {
     LONG_HIGH32,
     LONG_LOW32U,
     LONG_HIGH32U,
-    LONG_ISZERO,
+    LONG_NOT,
     LONG_COMPL,
-    LONG_EQUAL,
+    LONG_LSHIFT,
+    LONG_RSHIFT,
+    LONG_LRSHIFT,   // logical (unsigned) right shift
     LONG_PACK,
-    LONG_UNPACK
+    LONG_UNPACK,
+    LONG_EQUAL,
+    LONG_ADD,
+    LONG_SUB,
+    LONG_OR,
+    LONG_AND,
 };
 
 static struct lcmd_s {
@@ -146,34 +120,108 @@ static struct lcmd_s {
     { (char *) "high32", LONG_HIGH32 },
     { (char *) "low32u", LONG_LOW32U },
     { (char *) "high32u", LONG_HIGH32U },
-    { (char *) "not", LONG_ISZERO },
+    { (char *) "not", LONG_NOT },
     { (char *) "compl", LONG_COMPL },
-    { (char *) "eq", LONG_EQUAL },
+    { (char *) "lshift", LONG_LSHIFT },
+    { (char *) "rshift", LONG_RSHIFT },
+    { (char *) "lrshift", LONG_LRSHIFT },
     { (char *) "pack", LONG_PACK },
     { (char *) "unpack", LONG_UNPACK },
+    { (char *) "eq", LONG_EQUAL },
+    { (char *) "add", LONG_ADD },
+    { (char *) "sub", LONG_SUB },
+    { (char *) "or", LONG_OR },
+    { (char *) "and", LONG_AND },
     {0}
 };
 
-//$lcntl(Int64/UInt64, LongCmd)
+static v8Value LongOp2(js_vm *vm,
+            long64 *i1, long64 *i2, enum LongCmd op) {
+    Isolate *isolate = vm->isolate;
+    EscapableHandleScope handle_scope(isolate);
+    switch (op) {
+    case LONG_EQUAL: {
+        bool isequal;
+        if (i1->issigned != i2->issigned
+                && (i1->val.uhigh >> 31) && (i2->val.uhigh >> 31))
+            isequal = false;
+        else
+            isequal = (i1->val.high == i2->val.high)
+                    && (i1->val.low == i2->val.low);
+        return handle_scope.Escape(Boolean::New(isolate, isequal));
+    }
+    case LONG_ADD:
+        if (i1->issigned) {
+            if (i2->issigned)
+                i1->val.i64 += i2->val.i64;
+            else
+                i1->val.i64 += i2->val.u64;
+            return handle_scope.Escape(Int64(vm, i1->val.i64));
+        }
+        if (i2->issigned)
+            i1->val.u64 += i2->val.i64;
+        else
+            i1->val.u64 += i2->val.u64;
+        return handle_scope.Escape(UInt64(vm, i1->val.u64));
+    case LONG_SUB:
+        if (i1->issigned) {
+            if (i2->issigned)
+                i1->val.i64 -= i2->val.i64;
+            else
+                i1->val.i64 -= i2->val.u64;
+            return handle_scope.Escape(Int64(vm, i1->val.i64));
+        }
+        if (i2->issigned)
+            i1->val.u64 -= i2->val.i64;
+        else
+            i1->val.u64 -= i2->val.u64;
+        return handle_scope.Escape(UInt64(vm, i1->val.u64));
+    case LONG_OR:
+        if (i1->issigned) {
+            if (i2->issigned)
+                i1->val.i64 |= i2->val.i64;
+            else
+                i1->val.i64 |= i2->val.u64;
+            return handle_scope.Escape(Int64(vm, i1->val.i64));
+        }
+        if (i2->issigned)
+            i1->val.u64 |= i2->val.i64;
+        else
+            i1->val.u64 |= i2->val.u64;
+        return handle_scope.Escape(UInt64(vm, i1->val.u64));
+    case LONG_AND:
+        if (i1->issigned) {
+            if (i2->issigned)
+                i1->val.i64 &= i2->val.i64;
+            else
+                i1->val.i64 &= i2->val.u64;
+            return handle_scope.Escape(Int64(vm, i1->val.i64));
+        }
+        if (i2->issigned)
+            i1->val.u64 &= i2->val.i64;
+        else
+            i1->val.u64 &= i2->val.u64;
+        return handle_scope.Escape(UInt64(vm, i1->val.u64));
+    default:
+        break;
+    }
+    return handle_scope.Escape(v8::Undefined(isolate));
+}
+
+//$lcntl(Int64/UInt64, LongCmd [, arg2])
 void LongCntl(const v8::FunctionCallbackInfo<v8::Value>& args) {
     int argc = args.Length();
     Isolate *isolate = args.GetIsolate();
+    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
     HandleScope handle_scope(isolate);
     ThrowNotEnoughArgs(isolate, argc < 1);
-    union integer64_u ival;
-    bool issigned = false;
     enum LongCmd cmd = LONG_TOSTRING;
     if (argc > 1) {
         cmd = static_cast<enum LongCmd>(args[1]->ToInt32(
                     isolate->GetCurrentContext()).ToLocalChecked()->Value());
     }
-
-    if (IsInt64(args[0])) {
-        issigned = true;
-        ival.i64 = GetInt64(args[0]);
-    } else if (IsUInt64(args[0])) {
-        ival.u64 = GetUInt64(args[0]);
-    } else {
+    long64 i1;
+    if (!LongValue(args[0], &i1)) {
         if (argc > 1 && (cmd == LONG_ISINT || cmd == LONG_ISUINT)) {
             args.GetReturnValue().Set(v8::False(isolate));
             return;
@@ -183,71 +231,89 @@ void LongCntl(const v8::FunctionCallbackInfo<v8::Value>& args) {
 
     switch (cmd) {
     case LONG_ISINT:
-        args.GetReturnValue().Set(Boolean::New(isolate, issigned));
+        args.GetReturnValue().Set(Boolean::New(isolate, i1.issigned));
         break;
     case LONG_ISUINT:
-        args.GetReturnValue().Set(Boolean::New(isolate, !issigned));
+        args.GetReturnValue().Set(Boolean::New(isolate, !i1.issigned));
         break;
     case LONG_TOSTRING: {
         char buf[32];
-        if (issigned)
-            sprintf(buf, "%" PRId64, ival.i64);
+        if (i1.issigned)
+            sprintf(buf, "%" PRId64, i1.val.i64);
         else
-            sprintf(buf, "%" PRIu64, ival.u64);
+            sprintf(buf, "%" PRIu64, i1.val.u64);
         args.GetReturnValue().Set(v8_str(isolate, buf));
     }
         break;
     case LONG_TONUMBER: {
-        double d = issigned ? (double)ival.i64 : (double)ival.u64;
+        double d = i1.issigned ? (double)i1.val.i64 : (double)i1.val.u64;
         args.GetReturnValue().Set(Number::New(isolate, d));
     }
         break;
     case LONG_LOW32:
-        args.GetReturnValue().Set(Integer::New(isolate, ival.low));
+        args.GetReturnValue().Set(Integer::New(isolate, i1.val.low));
         break;
     case LONG_HIGH32:
-        args.GetReturnValue().Set(Integer::New(isolate, ival.high));
+        args.GetReturnValue().Set(Integer::New(isolate, i1.val.high));
         break;
     case LONG_LOW32U:
         args.GetReturnValue().Set(
-                        Integer::NewFromUnsigned(isolate, ival.ulow));
+                        Integer::NewFromUnsigned(isolate, i1.val.ulow));
         break;
     case LONG_HIGH32U:
         args.GetReturnValue().Set(
-                        Integer::NewFromUnsigned(isolate, ival.uhigh));
+                        Integer::NewFromUnsigned(isolate, i1.val.uhigh));
         break;
-    case LONG_ISZERO:
+    case LONG_NOT:  // == 0 ?
         args.GetReturnValue().Set(
-                    Boolean::New(isolate, !ival.i64));
+                    Boolean::New(isolate, !i1.val.i64));
         break;
-    case LONG_COMPL: {
-        js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
-        if (issigned)
-            args.GetReturnValue().Set(Int64(vm, ~ival.i64));
+    case LONG_COMPL:
+        if (i1.issigned)
+            args.GetReturnValue().Set(Int64(vm, ~i1.val.i64));
         else
-            args.GetReturnValue().Set(UInt64(vm, ~ival.u64));
-    }
+            args.GetReturnValue().Set(UInt64(vm, ~i1.val.u64));
         break;
-    case LONG_EQUAL: {
-        union integer64_u ival2;
-        bool issigned2 = false;
+    case LONG_LSHIFT:
+    case LONG_RSHIFT:
+    case LONG_LRSHIFT: {
+        uint32_t n;
         if (argc < 3)
             ThrowNotEnoughArgs(isolate, true);
-        if (IsInt64(args[2])) {
-            issigned2 = true;
-            ival2.i64 = GetInt64(args[2]);
-        } else if (IsUInt64(args[2])) {
-            ival2.u64 = GetUInt64(args[2]);
-        } else
+        n = args[2]->ToUint32(
+                isolate->GetCurrentContext()).ToLocalChecked()->Value();
+        n &= 63;
+        if (n == 0) {
+            args.GetReturnValue().Set(args[0]);
+        } else if (cmd == LONG_LRSHIFT) {
+            uint64_t result = (i1.val.u64 >> n);
+            if (i1.issigned)
+                args.GetReturnValue().Set(Int64(vm, (int64_t)result));
+            else
+                args.GetReturnValue().Set(UInt64(vm, result));
+        } else if (i1.issigned) {
+            int64_t result = (cmd == LONG_LSHIFT) ? (i1.val.i64 << n)
+                    : (i1.val.i64 >> n);
+            args.GetReturnValue().Set(Int64(vm, result));
+        } else {
+            uint64_t result = (cmd == LONG_LSHIFT) ? (i1.val.u64 << n)
+                    : (i1.val.u64 >> n);
+            args.GetReturnValue().Set(UInt64(vm, result));
+        }
+    }
+        break;
+    case LONG_EQUAL:
+    case LONG_OR:
+    case LONG_AND:
+    case LONG_SUB:
+    case LONG_ADD: {
+        if (argc < 3)
+            ThrowNotEnoughArgs(isolate, true);
+        long64 i2;
+        if (!LongValue(args[2], &i2))
             ThrowTypeError(isolate,
                     "$lcntl: 'long' argument (#3) expected");
-        bool isequal;
-        if (issigned != issigned2 && (ival.uhigh >> 31) && (ival2.uhigh >> 31))
-            isequal = false;
-        else
-            isequal = (ival.high == ival2.high) && (ival.low == ival2.low); 
-        args.GetReturnValue().Set(
-                    Boolean::New(isolate, isequal));
+        args.GetReturnValue().Set(LongOp2(vm, &i1, &i2, cmd));
     }
         break;
     case LONG_PACK:
@@ -267,10 +333,10 @@ void LongCntl(const v8::FunctionCallbackInfo<v8::Value>& args) {
                     isolate->GetCurrentContext()).ToLocalChecked()->Value();
         ptr = (char *) ptr + off;
         if (cmd == LONG_PACK) {
-            *(reinterpret_cast<uint64_t *>(ptr)) = ival.u64;
+            *(reinterpret_cast<uint64_t *>(ptr)) = i1.val.u64;
         } else {
-            ival.u64 = *(reinterpret_cast<uint64_t *>(ptr));
-            SetUInt64(args[0], ival.u64);
+            i1.val.u64 = *(reinterpret_cast<uint64_t *>(ptr));
+            SetUInt64(args[0], i1.val.u64);
         }
         args.GetReturnValue().Set(Integer::New(isolate, 8));
     }
@@ -294,21 +360,21 @@ static void Long(const v8::FunctionCallbackInfo<v8::Value>& args) {
     if (argc > 1)
         issigned = !args[1]->BooleanValue(context).FromJust();
 
-    union integer64_u ival;
-    ival.low = ival.high = 0;
+    long64 i1;
+    i1.val.low = i1.val.high = 0;
     if (args[0]->IsObject()) {  // likely array
         v8Object obj = v8Object::Cast(args[0]);
-        ival.low = obj->Get(context, 0).ToLocalChecked()
+        i1.val.low = obj->Get(context, 0).ToLocalChecked()
                         ->Int32Value(context).FromJust();
-        ival.high = obj->Get(context, 1).ToLocalChecked()
+        i1.val.high = obj->Get(context, 1).ToLocalChecked()
                         ->Int32Value(context).FromJust();
     } else if (args[0]->IsNumber()) {
         double d = args[0]->NumberValue(context).FromJust();
         if (isfinite(d)) {
             if (issigned)
-                ival.i64 = d;
+                i1.val.i64 = d;
             else
-                ival.u64 = d;
+                i1.val.u64 = d;
         }
     } else {
         v8String s = args[0]->ToString(context).ToLocalChecked();
@@ -316,20 +382,20 @@ static void Long(const v8::FunctionCallbackInfo<v8::Value>& args) {
         if (*stval) {
             errno = 0;
             if (issigned) {
-                ival.i64 = (int64_t) strtoll(*stval, nullptr, 0);
+                i1.val.i64 = (int64_t) strtoll(*stval, nullptr, 0);
                 if (errno != 0)
-                    ival.i64 = 0;
+                    i1.val.i64 = 0;
             } else {
-                ival.u64 = (uint64_t) strtoull(*stval, nullptr, 0);
+                i1.val.u64 = (uint64_t) strtoull(*stval, nullptr, 0);
                 if (errno != 0)
-                    ival.u64 = 0;
+                    i1.val.u64 = 0;
             }
         }
     }
     if (issigned)
-        args.GetReturnValue().Set(Int64(vm, ival.i64));
+        args.GetReturnValue().Set(Int64(vm, i1.val.i64));
     else
-        args.GetReturnValue().Set(UInt64(vm, ival.u64));
+        args.GetReturnValue().Set(UInt64(vm, i1.val.u64));
 }
 
 Local<FunctionTemplate> LongTemplate(js_vm *vm) {

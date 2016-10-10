@@ -92,7 +92,7 @@
     var _findFile = function (path, loader) {
         if (/^\.\.?\//.test(path) && loader._cwd)
             path = loader._cwd + '/' + path;
-        var found = loader.isRegularFile(path);
+        let found = loader.isRegularFile(path);
         if (! found && path.lastIndexOf('.js') < 0) {
             path += '.js';
             found = loader.isRegularFile(path);
@@ -103,14 +103,14 @@
     };
 
     var findFile = function (path, loader, searchPath) {
-        var filename = _findFile(path, loader);
+        let filename = _findFile(path, loader);
         if (filename !== null)
             return filename;
         if (/^\.\.?\//.test(path))
             return null;
-        var pathList = searchPath.split(':');
-        var tryDir;
-    	for (var i = 0; i < pathList.length; i++) {
+        let pathList = searchPath.split(':');
+        let tryDir;
+        for (let i = 0; i < pathList.length; i++) {
             tryDir = pathList[i].trim();
             if (tryDir != '') {
                 filename = _findFile(tryDir + '/' + path, loader);
@@ -122,7 +122,7 @@
     };
 
     var dlloader = function () {
-        var dll = function (libname) {
+        let dll = function (libname) {
             libname = libname + '';
             let lib;
             try {
