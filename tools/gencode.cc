@@ -404,7 +404,7 @@ protected:
 
         // the struct entry for the table of functions
         char buf[256];
-        size_t n = snprintf(buf, 256, "{ %d, do_%s, \"%s\" },\n",
+        size_t n = snprintf(buf, 256, "{ %d, do_%s, \"%s\", JSV8_DLFUNC },\n",
                             numParams, cname, cname);
         ASSERT(n < 256);
         m_fns.append(buf);
@@ -643,7 +643,7 @@ public:
         if (pos != StringRef::npos)
             hName = Filename.substr(pos+1);
 
-        fprintf(stdout, "#define JS_DLL 1\n#include \"jsv8dlfn.h\"\n");
+        fprintf(stdout, "#include \"jsv8dlfn.h\"\n");
 //        if (beginCode != "") {
 //            fprintf(stdout, "%s\n", beginCode.c_str());
 //        }
@@ -703,7 +703,6 @@ public:
         fprintf(stdout, "this['#tags'] = _tags;this['#types'] = _types;});\";\n\n");
 
         fprintf(stdout, "int JS_LOAD(js_vm *vm, js_val vobj) {\n");
-        fprintf(stdout, "js_dl = dl_;\n");
         fprintf(stdout, "int rc = dl_->call_str(vm, source_str_, vobj);\n");
         fprintf(stdout, "if (!rc) return -1;\n");
         fprintf(stdout, "JS_EXPORT(fntab_);\n}\n");

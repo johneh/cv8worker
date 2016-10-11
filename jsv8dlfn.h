@@ -24,10 +24,13 @@ struct js_dlfn_s {
     const char *(*errstr)(js_vm *);
 };
 
-#ifdef JS_DLL   /* define in the dll source before including this header */
+#ifndef JS_NOTDLL   /* define in the main source before including this header */
 static struct js_dlfn_s *js_dl;
-#define JS_LOAD(vm, libobj) js_load_(vm, libobj, struct js_dlfn_s *dl_, js_ffn **fp_)
-#define JS_EXPORT(t_) do {\
+#define JS_LOAD(vm, libobj) \
+js_load_(vm, libobj, struct js_dlfn_s *dl_, js_ffn **fp_) {\
+    js_dl = dl_;
+
+#define JS_EXPORT(t_) } do {\
 *fp_ = t_; return sizeof(t_)/sizeof(t_[0]);\
 } while(0)
 #else

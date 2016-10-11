@@ -67,6 +67,7 @@ static Isolate::CreateParams create_params;
 extern "C" {
 
 #include "jsv8.h"
+#define JS_NOTDLL
 #include "jsv8dlfn.h"
 
 #ifdef V8TEST
@@ -372,6 +373,19 @@ int js_godone(js_handle *hcr) {
 
 ///////////////////////////////////End Coroutine////////////////////////////////
 
+static v8Object WrapFunc(js_vm *vm, js_ffn *func_item) {
+    Isolate *isolate = vm->isolate;
+    EscapableHandleScope scope(isolate);
+    v8ObjectTemplate templ =
+        v8ObjectTemplate::New(isolate, vm->extfunc_template);
+    v8Object fnObj = templ->NewInstance(isolate->GetCurrentContext()).ToLocalChecked();
+    fnObj->SetAlignedPointerInInternalField(0,
+             reinterpret_cast<void*>(static_cast<uintptr_t>(V8EXTFUNC<<2)));
+    fnObj->SetInternalField(1, External::New(isolate, (void *)func_item));
+    fnObj->SetPrototype(v8Value::New(isolate, vm->ctype_proto));
+    return scope.Escape(fnObj);
+}
+
 static void Print(const FunctionCallbackInfo<Value>& args) {
     bool first = true;
     int errcount = 0;
@@ -496,7 +510,7 @@ static void CallForeignFunc(
     if (argc > MAXARGS || argc != func_wrap->pcount)
         ThrowError(isolate, "C-function called with incorrect # of arguments");
 
-    if (func_wrap->isdlfunc) {
+    if ((func_wrap->flags & JSV8_DLFUNC)) {
         assert(vm->dlstr_idx == 0);
         v8Value argv[MAXARGS+1];
         // N.B.: argv[0] is for the return value
@@ -976,19 +990,13 @@ js_handle *js_pointer(js_vm *vm, void *ptr) {
     return h;
 }
 
-js_handle *js_cfunc(js_vm *vm, const struct cffn_s *func_wrap) {
+js_handle *js_cfunc(js_vm *vm, const struct cffn_s *func_item) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate);
     v8Context context = v8Context::New(isolate, vm->context);
     Context::Scope context_scope(context);
-    ((struct cffn_s *) func_wrap)->isdlfunc = 0;
-    v8ObjectTemplate templ =
-        v8ObjectTemplate::New(isolate, vm->extfunc_template);
-    v8Object fnObj = templ->NewInstance(context).ToLocalChecked();
-    fnObj->SetAlignedPointerInInternalField(0,
-             reinterpret_cast<void*>(static_cast<uintptr_t>(V8EXTFUNC<<2)));
-    fnObj->SetInternalField(1, External::New(isolate, (void *)func_wrap));
-    fnObj->SetPrototype(v8Value::New(isolate, vm->ctype_proto));
+    ((js_ffn *) func_item)->flags = 0;
+    v8Object fnObj = WrapFunc(vm, (js_ffn *) func_item);
     return make_handle(vm, fnObj, V8EXTFUNC);
 }
 
@@ -1266,16 +1274,16 @@ void Dispose(const FunctionCallbackInfo<Value>& args) {
         h->free_func = free;
         h->flags |= WEAK_HANDLE;
     } else if (GetCtypeId(vm, args[0]) == V8EXTFUNC) {
-        js_ffn *func_wrap = static_cast<js_ffn *>(
+        js_ffn *func_item = static_cast<js_ffn *>(
                 v8External::Cast(
                         v8Object::Cast(args[0])->GetInternalField(1)
                     )->Value()
             );
-        if (!func_wrap->isdlfunc && func_wrap->pcount == 1) {
-            h->free_extwrap = (Fnfnwrap) func_wrap->fp;
+        if (!(func_item->flags & JSV8_DLFUNC) && func_item->pcount == 1) {
+            h->free_extwrap = (Fnfnwrap) func_item->fp;
             h->flags |= (FREE_EXTWRAP|WEAK_HANDLE);
-        } else if (func_wrap->isdlfunc && func_wrap->pcount == 1) {
-            h->free_dlwrap = (Fndlfnwrap) func_wrap->fp;
+        } else if ((func_item->flags & JSV8_DLFUNC) && func_item->pcount == 1) {
+            h->free_dlwrap = (Fndlfnwrap) func_item->fp;
             h->flags |= (FREE_DLWRAP|WEAK_HANDLE);
         }
     }
@@ -1500,19 +1508,14 @@ static void Load(const FunctionCallbackInfo<Value>& args) {
         dlclose(dl);
         ThrowError(isolate, vm->errstr ? vm->errstr : "unknown error");
     }
-    for (int i = 0; i < nfunc; i++) {
-        if (!functab[i].name)
-            break;
-        functab[i].isdlfunc = 1;
-        v8ObjectTemplate templ =
-            v8ObjectTemplate::New(isolate, vm->extfunc_template);
-        v8Object fnObj = templ->NewInstance(context).ToLocalChecked();
-        fnObj->SetAlignedPointerInInternalField(0,
-             reinterpret_cast<void*>(static_cast<uintptr_t>(V8EXTFUNC<<2)));
-        fnObj->SetInternalField(1,
-                    External::New(isolate, (void *)&functab[i]));
-        fnObj->SetPrototype(v8Value::New(isolate, vm->ctype_proto));
-
+    for (int i = 0; i < nfunc && functab[i].name; i++) {
+        v8Object fnObj;
+        if (functab[i].flags & JSV8_DLCORO) {
+            fnObj = NewGo(vm, functab[i].fp);
+        } else {
+            functab[i].flags |= JSV8_DLFUNC;
+            fnObj = WrapFunc(vm, &functab[i]);
+        }
         o1->Set(context,
                 String::NewFromUtf8(isolate, functab[i].name),
                 fnObj).FromJust();

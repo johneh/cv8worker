@@ -16,7 +16,9 @@ struct cffn_s {
     int pcount;
     void *fp;
     const char *name;
-    int isdlfunc;
+    int flags;
+#define JSV8_DLFUNC  (1<<0)
+#define JSV8_DLCORO  (1<<1)
 };
 
 typedef struct cffn_s js_ffn;
