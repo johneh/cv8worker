@@ -42,21 +42,21 @@ void testcall(js_vm *vm) {
     js_reset(list_props);
 }
 
-coroutine void do_task1(js_vm *vm, js_handle *cr, js_handle *hin) {
-    const char *s1 = js_tostring(hin);
+coroutine void do_task1(js_vm *vm, handle_t hcr, void *data) {
+    const char *s1 = data;
     fprintf(stderr, "<- %s\n", s1);
     int k = random() % 50;
     mill_sleep(now() + k);
-    char tmp[100];
+    char *tmp = malloc(100);
     sprintf(tmp, "%s -> Task done in %d millsecs ...", s1, k);
-    js_gosend(cr, js_string(vm, tmp, -1));    /* Both handles freed by V8 */
-    js_godone(cr);
+    js_gosend(vm, hcr, tmp);
+    js_godone(vm, hcr);
 }
 
 
 /* Coroutine in the main thread (concurrency & parallelism) */
 void testgo(js_vm *vm) {
-    js_handle *cr = js_go(vm, (void *) do_task1);
+    js_handle *cr = js_go(vm, do_task1);
     /* cr is a js object, can set properties on it */
     int r = js_set_string(cr, "name", "task1");
     assert(r);
@@ -78,21 +78,27 @@ void testgo(js_vm *vm) {
     rc = js_run(vm,
 "function foo(k) { var s=0; for (var i=0;i <k;i++){s+=i;}return s;}"
 "for(var i=1; i<=5;i++) {\n\
-    task1('go'+i, function (err, data) {\n\
-            if (err == null) $print(data);\n\
+    var s1=$malloc(10); s1.pack(0, 's', 'go' + i);s1.dispose();\n\
+    task1(s1, function (err, data) {\n\
+            if (err == null) $print(data.unpack(0, 's')[0]);data.dispose();\n\
     });\n\
 }\n"
 "$msleep(35);\n"
 "foo(1000000);$print(foo(2000000));"
 "for(var i=6; i<=10;i++) {\n\
-    task1('go'+i, function (err, data) {\n\
-        if (err == null) $print(data);\n\
+    var s1=$malloc(10); s1.pack(0, 's', 'go' + i);s1.dispose();\n\
+    task1(s1, function (err, data) {\n\
+        if (err == null) $print(data.unpack(0, 's')[0]);data.dispose();\n\
     });\n\
 }\n"
 "$msleep(25);\n"
 "/*foo(1000000);$print(foo(2000000));*/"
     );
     CHECK(rc, vm);
+#if 0
+    int weak_counter = js_gc(vm);
+    printf("weak counter = %d\n", weak_counter);
+#endif
 }
 
 static char *readfile(const char *filename, size_t *len);

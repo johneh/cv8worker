@@ -3,6 +3,8 @@
 
 #define MAXARGS 12
 
+class PersistentStore;
+
 // V8 state (Isolate)
 
 struct js_vm_s {
@@ -31,6 +33,8 @@ struct js_vm_s {
 
     v8::Persistent<v8::Value> ctype_proto;
     v8::Persistent<v8::Value> cptr_proto;
+
+    PersistentStore *store_;
 
     char *dlstr[MAXARGS];
     int dlstr_idx;

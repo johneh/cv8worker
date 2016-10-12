@@ -16,6 +16,7 @@
 #include "util.h"
 #include "long.h"
 #include "ptr.h"
+#include "store.h"
 
 using namespace v8;
 
@@ -109,16 +110,22 @@ static void Panic(Isolate *isolate, TryCatch *try_catch) {
 }
 
 ////////////////////////////////// Coroutine //////////////////////////////////
-#define GOROUTINE_INTERNAL_FIELD_COUNT 3
+#define GOROUTINE_INTERNAL_FIELD_COUNT 4
 enum {
     GoError = (1 << 0),
-    GoDontResetOut = (1 << 1)
 };
 
 struct GoCallback {
-    js_handle *crp;
-    js_handle *data;
+    handle_t h;
+    void *data;
     int flags;
+};
+
+struct Go_s {
+    js_vm *vm;
+    Fngo fp;
+    void *inp;
+    handle_t h;
 };
 
 static v8Object NewGo(js_vm *vm, void *fptr) {
@@ -168,13 +175,10 @@ static v8Object CloneGo(js_vm *vm, v8Object cr1) {
 coroutine static void start_go(mill_pipe inq) {
     while (true) {
         int done;
-        js_handle *hcr = *((js_handle **) mill_piperecv(inq, &done));
+        Go_s *g = *((Go_s **) mill_piperecv(inq, &done));
         if (done)
             break;
-        assert(hcr->type == V8GO);
-        Fngo fn = reinterpret_cast<Fngo>(hcr->ptr);
-        hcr->ptr = nullptr;
-        go(fn(hcr->vm, hcr, hcr->hp));
+        go(g->fp(g->vm, g->h, g->inp));
     }
 }
 
@@ -193,8 +197,8 @@ coroutine static void recv_go(js_vm *vm) {
     }
 }
 
-static void send_go(js_vm *vm, js_handle *hcr) {
-    int rc = mill_pipesend(vm->inq, (void *) &hcr);
+static void send_go(js_vm *vm, Go_s *g) {
+    int rc = mill_pipesend(vm->inq, (void *) &g);
     if (rc == -1) {
         // FIXME
     }
@@ -202,7 +206,7 @@ static void send_go(js_vm *vm, js_handle *hcr) {
 
 // $go(coro, input [, callback])
 static void Go(const FunctionCallbackInfo<Value>& args) {
-    js_handle *hcr;
+    Go_s *g;
     js_vm *vm;
 
     { // start V8 scope
@@ -212,78 +216,81 @@ static void Go(const FunctionCallbackInfo<Value>& args) {
     int argc = args.Length();
     ThrowNotEnoughArgs(isolate, argc < 3);
     vm = static_cast<js_vm*>(isolate->GetData(0));
+
+    if ((GetCtypeId(vm, args[1]) != V8EXTPTR) && !args[1]->IsArrayBuffer())
+        ThrowTypeError(isolate,
+                "$go argument #2: pointer or ArrayBuffer expected");
     if (!args[2]->IsFunction())
         ThrowTypeError(isolate, "$go argument #3: function expected");
-
     v8Object cr0 = ToGo(args[0]);
     if (cr0.IsEmpty())
         ThrowTypeError(isolate, "$go argument #1: coroutine expected");
 
     v8Object cr = CloneGo(vm, cr0);
-    hcr = make_handle(vm, cr, V8GO);
-
-    cr->SetInternalField(2, args[2]);
-
-    hcr->ptr = v8External::Cast(cr->GetInternalField(1))->Value();
+    g = new Go_s;
+    g->vm = vm;
     vm->ncoro++;
-    js_handle *hin = make_handle(vm, args[1], V8UNKNOWN);
 
-    // Perform conversions now to avoid lock contention.
-    switch (hin->type) {
-    case V8STRING:
-        (void) js_tostring(hin);
-        break;
-    case V8EXTPTR:
-        (void) js_topointer(hin);
-        break;
-    case V8NUMBER:
-        (void) js_tonumber(hin);
-        break;
-    default:
-        break;
-    }
-    hcr->hp = hin;
+    if (args[1]->IsArrayBuffer())
+        g->inp = v8ArrayBuffer::Cast(args[1])->GetContents().Data();
+    else
+        g->inp = UnwrapPtr(v8Object::Cast(args[1]));
+
+    cr->SetInternalField(2, args[2]);   // callback
+
+    cr->SetInternalField(3, args[1]);   // input
+
+    g->fp = reinterpret_cast<Fngo>(
+                    v8External::Cast(cr->GetInternalField(1))->Value());
+
+    cr->SetAlignedPointerInInternalField(1, g); // overwrite field #1
+
+    g->h = vm->store_->Set(cr);
 
     /* Unlocker unlocker(isolate); */
 
     }   // end V8 scope
 
-    send_go(vm, hcr);
+    send_go(vm, g);
 }
 
 // Execute callback(err, data). Panic if any exception thrown.
 static void RunGoCallback(js_vm *vm, GoCallback *cb) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate)
+
+    v8Object cr = ToGo(vm->store_->Get(cb->h));
+    if (cr.IsEmpty()) {
+        fprintf(stderr, "go callback: invalid coroutine handle\n");
+        exit(1);
+    }
+
     if (!cb->data) {
-        /* From js_godone() */
+        /* From godone() */
         vm->ncoro--;
-        /* free input handle */
-        js_reset(cb->crp->hp);
-        js_reset(cb->crp);
+        Go_s *g = reinterpret_cast<Go_s *>(
+                        cr->GetAlignedPointerFromInternalField(1));
+        vm->store_->Dispose(cb->h);
+        delete g;
         delete cb;
         return;
     }
+
     TryCatch try_catch(isolate);
 
     // GetCurrentContext() is empty if called from WaitFor().
     v8Context context = v8Context::New(isolate, vm->context);
     Context::Scope context_scope(context);
 
-    v8Object cr = v8Object::Cast(v8Value::New(isolate, cb->crp->handle));
     v8Function func = v8Function::Cast(cr->GetInternalField(2));
-    v8Value outval = v8Value::New(isolate, cb->data->handle);
-    if (cb->data != cb->crp && !(cb->flags & GoDontResetOut))
-        js_reset(cb->data);
-
     v8Value args[2];
     if (cb->flags & GoError) {
-        args[0] = Exception::Error(
-                    outval->ToString(context).ToLocalChecked());
+        char *message = reinterpret_cast<char *>(cb->data);
+        args[0] = Exception::Error(v8_str(isolate, message));
         args[1] = v8::Null(isolate);
     } else {
         args[0] = v8::Null(isolate);
-        args[1] = outval;
+        args[1] = WrapPtr(vm, cb->data);
     }
     delete cb;
 
@@ -315,61 +322,50 @@ static void MakeGoTemplate(js_vm *vm) {
     vm->go_template.Reset(isolate, templ);
 }
 
+// XXX: not needed for DLL
 js_handle *js_go(js_vm *vm, Fngo fptr) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate)
     v8Context context = v8Context::New(isolate, vm->context);
     Context::Scope context_scope(context);
-    return make_handle(vm, NewGo(vm, reinterpret_cast<void *>(fptr)), V8GO);
+    v8Value gObj = NewGo(vm, reinterpret_cast<void *>(fptr));
+    return make_handle(vm, gObj, V8GO);
 }
 
-
-// $go(coro, in, callback)
-//  Does not require acquiring a locker object.
-
-int js_gosend(js_handle *hcr, js_handle *hout) {
-    js_vm *vm = hcr->vm;
-    Isolate *isolate = vm->isolate;
-    if (hcr->type != V8GO) {
-        Locker locker(isolate);
-        js_set_errstr(vm, "js_gosend: coroutine object argument expected");
-        return 0;
-    }
-    if (!hout)
-        hout = vm->null_handle;
-
+static GoCallback *gosend_(js_vm *vm, handle_t hcr, void *data) {
     GoCallback *cb = new GoCallback;
-    cb->crp = hcr;
-    cb->data = hout;
+    cb->h = hcr;
+    cb->data = data;
     cb->flags = 0;
-    if (hout->flags & ERROR_HANDLE)
-        cb->flags |= GoError;
-    if (hout == hcr->hp)
-        cb->flags |= GoDontResetOut;
-
     // Coroutine is running in a different thread.
     int rc = mill_pipesend(vm->outq, &cb);
     assert(rc == 0);
-    return 1;
+    return cb;
 }
 
-int js_godone(js_handle *hcr) {
-    js_vm *vm = hcr->vm;
-    Isolate *isolate = vm->isolate;
-    if (hcr->type != V8GO) {
-        Locker locker(isolate);
-        js_set_errstr(vm, "js_godone: coroutine object argument expected");
+// gosend(vm, coro, data)
+//  Defer verifying handle to avoid lock contention.
+
+int js_gosend(js_vm *vm, handle_t hcr, void *data) {
+    if (!data) {
+        Isolate *isolate = vm->isolate;
+        LOCK_SCOPE(isolate)
+        js_set_errstr(vm, "js_gosend: invalid (null) 'data' argument");
         return 0;
     }
-
-    GoCallback *cb = new GoCallback;
-    cb->crp = hcr;
-    cb->data = nullptr;
-    int rc = mill_pipesend(vm->outq, &cb);
-    assert(rc == 0);
-    return 1;
+    return (gosend_(vm, hcr, data) != nullptr);
 }
 
+int js_goerr(js_vm *vm, handle_t hcr, char *message) {
+    GoCallback *cb = gosend_(vm, hcr, reinterpret_cast<void *>(message));
+    if (cb)
+        cb->flags = GoError;
+    return (cb != nullptr);
+}
+
+int js_godone(js_vm *vm, handle_t hcr) {
+    return (gosend_(vm, hcr, nullptr) != nullptr);
+}
 
 ///////////////////////////////////End Coroutine////////////////////////////////
 
@@ -1001,7 +997,6 @@ js_handle *js_cfunc(js_vm *vm, const struct cffn_s *func_item) {
 }
 
 // JS error return for C function call (See CallForeignFunc())
-//  and error argument in $go callbacks (See js_godone()).
 js_handle *js_error(js_vm *vm, const char *message) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate)
@@ -1636,6 +1631,8 @@ static void CreateIsolate(js_vm *vm) {
 
     vm->global_handle = make_handle(vm, realGlobal, V8OBJECT);
     vm->global_handle->flags |= PERM_HANDLE;
+
+    vm->store_ = new PersistentStore(isolate, 128);
 }
 
 // Runs in the worker(V8) thread.

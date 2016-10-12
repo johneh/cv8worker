@@ -65,8 +65,9 @@ extern int js_isundefined(js_handle *h);
 
 extern js_handle *js_go(js_vm *vm, Fngo fptr);
 /* callback */
-extern int js_gosend(js_handle *hcr, js_handle *hout);
-extern int js_godone(js_handle *hcr);
+extern int js_gosend(js_vm *vm, handle_t hcr, void *data);
+extern int js_goerr(js_vm *vm, handle_t hcr, char *message);
+extern int js_godone(js_vm *vm, handle_t hcr);
 
 extern const char *js_errstr(js_vm *vm);
 
