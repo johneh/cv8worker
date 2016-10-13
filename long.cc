@@ -212,7 +212,7 @@ static v8Value LongOp2(js_vm *vm,
 void LongCntl(const v8::FunctionCallbackInfo<v8::Value>& args) {
     int argc = args.Length();
     Isolate *isolate = args.GetIsolate();
-    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
+    js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
     HandleScope handle_scope(isolate);
     ThrowNotEnoughArgs(isolate, argc < 1);
     enum LongCmd cmd = LONG_TOSTRING;
@@ -352,7 +352,7 @@ void LongCntl(const v8::FunctionCallbackInfo<v8::Value>& args) {
 static void Long(const v8::FunctionCallbackInfo<v8::Value>& args) {
     int argc = args.Length();
     Isolate *isolate = args.GetIsolate();
-    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
+    js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
     HandleScope handle_scope(isolate);
     ThrowNotEnoughArgs(isolate, argc < 1);
     v8Context context = isolate->GetCurrentContext();

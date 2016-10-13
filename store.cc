@@ -15,11 +15,9 @@ using namespace v8;
 #define BITSIZE sizeof(uint32_t) 
 #define BITWIDTH (BITSIZE * 8)
 #define MarkSlot(a, k) (a[k/BITWIDTH] |= (1 << (k%BITWIDTH)))
-#define IsValidSlot(a, sz, k) (k > 0 && k < sz && (a[k/BITWIDTH] & (1 << (k%BITWIDTH))))
+#define IsSlotMarked(a, sz, k) (k > 0 && k < sz && (a[k/BITWIDTH] & (1 << (k%BITWIDTH))))
 #define ClearSlot(a, k)    (a[k/BITWIDTH] &= ~(1 << (k%BITWIDTH)))
 
-
-// FIXME -- use new instead of malloc .. ?
 
 PersistentStore::PersistentStore(Isolate *isolate, unsigned init_size)
              : isolate_(isolate) {
@@ -42,37 +40,45 @@ PersistentStore::~PersistentStore() {
 unsigned PersistentStore::Set(v8Value value) {
     HandleScope handle_scope(isolate_);
     unsigned slot = FindSlot();
+
     if (slot >= size_) {
+        v8Context context = isolate_->GetCurrentContext();
         unsigned new_size = 2 * size_;
         v8Object o2 = MakeContainer((int) new_size);
         v8Object o1 = v8Object::New(isolate_, container_);
         for (unsigned i = 0; i < size_; i++) {
-            o2->SetInternalField(i, o1->GetInternalField(i));
+            o2->Set(context, i,
+                    o1->Get(context, i).ToLocalChecked()).FromJust();
         }
         size_ = new_size;
         container_.Reset(isolate_, o2);
         assert(na_ == size_/BITWIDTH);
     }
-    v8Object::New(isolate_, container_)->SetInternalField(slot, value);
+
+    bool success = v8Object::New(isolate_, container_)->Set(
+                    isolate_->GetCurrentContext(), slot, value).FromJust();
+    assert(success);    // It is writable. Right?
     return slot;
 }
 
 v8Value PersistentStore::Get(unsigned slot) {
     EscapableHandleScope handle_scope(isolate_);
     v8Value v;
-    if (!IsValidSlot(a_, size_, slot))
-        v = v8::Undefined(isolate_);    //XXX: v8Value() Empty handle ?
+    if (!IsSlotMarked(a_, size_, slot))
+        v = v8::Undefined(isolate_);
     else
-        v = v8Object::New(isolate_, container_)->GetInternalField(slot);
+        v = v8Object::New(isolate_, container_)->Get(
+            isolate_->GetCurrentContext(), slot).ToLocalChecked();
     return handle_scope.Escape(v);
 }
 
 void PersistentStore::Dispose(unsigned slot) {
-    if (!IsValidSlot(a_, size_, slot))
+    if (!IsSlotMarked(a_, size_, slot))
         return;
     HandleScope handle_scope(isolate_);
     v8Object::New(isolate_, container_)
-                    -> SetInternalField(slot, v8::Undefined(isolate_));
+                    -> Set(isolate_->GetCurrentContext(),
+                            slot, v8::Undefined(isolate_)).FromJust();
     ClearSlot(a_, slot);
 }
 
@@ -99,9 +105,6 @@ int PersistentStore::FindSlot() {
 
 v8Object PersistentStore::MakeContainer(unsigned size) {
     EscapableHandleScope handle_scope(isolate_);
-    v8ObjectTemplate templ = ObjectTemplate::New(isolate_);
-    templ->SetInternalFieldCount(size);
-    v8Object obj = templ->NewInstance(
-            isolate_->GetCurrentContext()).ToLocalChecked();
-    return handle_scope.Escape(obj);
+    v8Array arr = Array::New(isolate_, size);
+    return handle_scope.Escape(arr);
 }

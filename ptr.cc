@@ -60,7 +60,7 @@ int IsCtypeWeak(v8Object obj) {
 static void Ctype(const FunctionCallbackInfo<Value>& args) {
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
-    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
+    js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
     v8Object obj = args.This();
     assert(args.Holder() == args.This()); // N.B.: not true in accessor callback.!
     int id = GetCtypeId(vm, obj);
@@ -74,7 +74,7 @@ static void Free(const FunctionCallbackInfo<Value>& args) {
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
     v8Object obj = args.Holder();
-    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
+    js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
     if (GetCtypeId(vm, obj) != V8EXTPTR)
         ThrowTypeError(isolate, "free: not a pointer");
     void *ptr = v8External::Cast(obj->GetInternalField(1))->Value();
@@ -88,7 +88,7 @@ static void Free(const FunctionCallbackInfo<Value>& args) {
 static void NotNull(const FunctionCallbackInfo<Value>& args) {
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
-    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
+    js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
     v8Object obj = args.Holder();
     if (GetCtypeId(vm, obj) != V8EXTPTR)
         ThrowTypeError(isolate, "notNull: not a pointer");
@@ -104,7 +104,7 @@ static void NotNull(const FunctionCallbackInfo<Value>& args) {
 static void Utf8String(const FunctionCallbackInfo<Value>& args) {
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
-    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
+    js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
     v8Object obj = args.Holder();
     if (GetCtypeId(vm, obj) != V8EXTPTR)
         ThrowTypeError(isolate, "utf8String: not a pointer");

@@ -113,6 +113,7 @@ static void Panic(Isolate *isolate, TryCatch *try_catch) {
 #define GOROUTINE_INTERNAL_FIELD_COUNT 4
 enum {
     GoError = (1 << 0),
+    GoDone = (1 << 1),
 };
 
 struct GoCallback {
@@ -215,7 +216,7 @@ static void Go(const FunctionCallbackInfo<Value>& args) {
     HandleScope handle_scope(isolate);
     int argc = args.Length();
     ThrowNotEnoughArgs(isolate, argc < 3);
-    vm = static_cast<js_vm*>(isolate->GetData(0));
+    vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
 
     if ((GetCtypeId(vm, args[1]) != V8EXTPTR) && !args[1]->IsArrayBuffer())
         ThrowTypeError(isolate,
@@ -247,6 +248,8 @@ static void Go(const FunctionCallbackInfo<Value>& args) {
 
     g->h = vm->store_->Set(cr);
 
+    assert(g->h);
+
     /* Unlocker unlocker(isolate); */
 
     }   // end V8 scope
@@ -265,7 +268,7 @@ static void RunGoCallback(js_vm *vm, GoCallback *cb) {
         exit(1);
     }
 
-    if (!cb->data) {
+    if ((cb->flags & GoDone) != 0) {
         /* From godone() */
         vm->ncoro--;
         Go_s *g = reinterpret_cast<Go_s *>(
@@ -347,12 +350,6 @@ static GoCallback *gosend_(js_vm *vm, handle_t hcr, void *data) {
 //  Defer verifying handle to avoid lock contention.
 
 int js_gosend(js_vm *vm, handle_t hcr, void *data) {
-    if (!data) {
-        Isolate *isolate = vm->isolate;
-        LOCK_SCOPE(isolate)
-        js_set_errstr(vm, "js_gosend: invalid (null) 'data' argument");
-        return 0;
-    }
     return (gosend_(vm, hcr, data) != nullptr);
 }
 
@@ -364,7 +361,10 @@ int js_goerr(js_vm *vm, handle_t hcr, char *message) {
 }
 
 int js_godone(js_vm *vm, handle_t hcr) {
-    return (gosend_(vm, hcr, nullptr) != nullptr);
+    GoCallback *cb = gosend_(vm, hcr, nullptr);
+    if (cb)
+        cb->flags = GoDone;
+    return (cb != nullptr);
 }
 
 ///////////////////////////////////End Coroutine////////////////////////////////
@@ -437,7 +437,7 @@ static void MSleep(const FunctionCallbackInfo<Value>& args) {
 static void Close(const FunctionCallbackInfo<Value>& args) {
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
-    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
+    js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
     mill_pipeclose(vm->inq);
 }
 
@@ -487,7 +487,7 @@ static void Malloc(const v8::FunctionCallbackInfo<v8::Value>& args) {
     if (argc > 1 && args[1]->BooleanValue(context).FromJust())
         memset(ptr, '\0', size);
     v8Object ptrObj = WrapPtr(
-            static_cast<js_vm*>(isolate->GetData(0)), ptr);
+            reinterpret_cast<js_vm*>(isolate->GetData(0)), ptr);
     args.GetReturnValue().Set(ptrObj);
 }
 
@@ -496,11 +496,11 @@ static void CallForeignFunc(
 
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
-    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
+    js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
 
     v8Object obj = args.Holder();
     assert(obj->InternalFieldCount() == 2);
-    cffn_s *func_wrap = static_cast<cffn_s *>(
+    cffn_s *func_wrap = reinterpret_cast<cffn_s *>(
                 v8External::Cast(obj->GetInternalField(1))->Value());
     int argc = args.Length();
     if (argc > MAXARGS || argc != func_wrap->pcount)
@@ -1255,7 +1255,7 @@ void Dispose(const FunctionCallbackInfo<Value>& args) {
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
     v8Object obj = args.Holder();
-    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
+    js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
     if (GetCtypeId(vm, obj) != V8EXTPTR)
         ThrowTypeError(isolate, "dispose: not a pointer");
     void *ptr = v8External::Cast(obj->GetInternalField(1))->Value();
@@ -1269,7 +1269,7 @@ void Dispose(const FunctionCallbackInfo<Value>& args) {
         h->free_func = free;
         h->flags |= WEAK_HANDLE;
     } else if (GetCtypeId(vm, args[0]) == V8EXTFUNC) {
-        js_ffn *func_item = static_cast<js_ffn *>(
+        js_ffn *func_item = reinterpret_cast<js_ffn *>(
                 v8External::Cast(
                         v8Object::Cast(args[0])->GetInternalField(1)
                     )->Value()
@@ -1468,7 +1468,7 @@ typedef int (*Fnload)(js_vm *, js_val, js_dlfn_s *, js_ffn **);
 static void Load(const FunctionCallbackInfo<Value>& args) {
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
-    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
+    js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
 
     int argc = args.Length();
     ThrowNotEnoughArgs(isolate, argc < 1);
@@ -1632,7 +1632,8 @@ static void CreateIsolate(js_vm *vm) {
     vm->global_handle = make_handle(vm, realGlobal, V8OBJECT);
     vm->global_handle->flags |= PERM_HANDLE;
 
-    vm->store_ = new PersistentStore(isolate, 128);
+    // Initial size should be some multiple of 32.
+    vm->store_ = new PersistentStore(isolate, 256);
 }
 
 // Runs in the worker(V8) thread.

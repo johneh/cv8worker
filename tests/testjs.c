@@ -75,6 +75,7 @@ void testgo(js_vm *vm) {
     js_reset(f1);
     js_reset(cr);
 
+    // XXX: 300 go routines to test resizing the persistent store
     rc = js_run(vm,
 "function foo(k) { var s=0; for (var i=0;i <k;i++){s+=i;}return s;}"
 "for(var i=1; i<=5;i++) {\n\
@@ -85,7 +86,7 @@ void testgo(js_vm *vm) {
 }\n"
 "$msleep(35);\n"
 "foo(1000000);$print(foo(2000000));"
-"for(var i=6; i<=10;i++) {\n\
+"for(var i=6; i<=300;i++) {\n\
     var s1=$malloc(10); s1.pack(0, 's', 'go' + i);s1.dispose();\n\
     task1(s1, function (err, data) {\n\
         if (err == null) $print(data.unpack(0, 's')[0]);data.dispose();\n\
