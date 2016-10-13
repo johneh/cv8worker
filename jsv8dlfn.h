@@ -22,6 +22,11 @@ struct js_dlfn_s {
 
     int (*call_str)(js_vm *, const char *, js_val);
     const char *(*errstr)(js_vm *);
+
+    int (*gosend)(js_vm *, js_hndl, void *);
+    int (*goerr)(js_vm *, js_hndl, char *);
+    int (*godone)(js_vm *, js_hndl);
+
 };
 
 #ifndef JS_NOTDLL   /* define in the main source before including this header */

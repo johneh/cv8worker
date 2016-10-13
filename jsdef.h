@@ -1,7 +1,7 @@
 #ifndef _JSDEF_H
 #define _JSDEF_H
 
-typedef int handle_t;
+typedef int js_hndl;
 
 struct js_vm_s;
 typedef struct js_vm_s js_vm;
@@ -9,7 +9,7 @@ typedef struct js_vm_s js_vm;
 struct js_handle_s;
 typedef struct js_handle_s js_handle;
 
-typedef void (*Fngo)(js_vm *vm, handle_t coro, void *data);
+typedef void (*Fngo)(js_vm *vm, js_hndl coro, void *data);
 
 typedef void (*Fnfree)(void *ptr);
 typedef js_handle *(*Fnfnwrap)(js_vm *, int, js_handle *[]);

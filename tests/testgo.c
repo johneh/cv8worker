@@ -30,7 +30,7 @@ void js_panic(js_vm *vm) {
 }
 #define CHECK(rc, vm) if(!rc) js_panic(vm)
 
-coroutine void write_response(js_vm *vm, handle_t hcr, void *p1) {
+coroutine void write_response(js_vm *vm, js_hndl hcr, void *p1) {
     /* 'ps' in JS pack() */
     struct foo_s {
         void *p;
@@ -80,7 +80,7 @@ finish:
 }
 
 
-coroutine void read_request(js_vm *vm, handle_t hcr, void *ptr) {
+coroutine void read_request(js_vm *vm, js_hndl hcr, void *ptr) {
     mill_fd csock = ptr;
     assert(csock);
     int msg_length = 0;
@@ -130,7 +130,7 @@ resp.pack(0, 'ps', csock, data);\n\
 });";
 
 
-coroutine void listen_and_accept(js_vm *vm, handle_t hcr, void *ptr) {
+coroutine void listen_and_accept(js_vm *vm, js_hndl hcr, void *ptr) {
     ipaddr address;
     int rc = iplocal(&address, NULL, 5555, 0);
     assert(rc == 0);

@@ -42,7 +42,7 @@ void testcall(js_vm *vm) {
     js_reset(list_props);
 }
 
-coroutine void do_task1(js_vm *vm, handle_t hcr, void *data) {
+coroutine void do_task1(js_vm *vm, js_hndl hcr, void *data) {
     const char *s1 = data;
     fprintf(stderr, "<- %s\n", s1);
     int k = random() % 50;

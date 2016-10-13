@@ -117,7 +117,7 @@ enum {
 };
 
 struct GoCallback {
-    handle_t h;
+    js_hndl h;
     void *data;
     int flags;
 };
@@ -126,7 +126,7 @@ struct Go_s {
     js_vm *vm;
     Fngo fp;
     void *inp;
-    handle_t h;
+    js_hndl h;
 };
 
 static v8Object NewGo(js_vm *vm, void *fptr) {
@@ -335,7 +335,7 @@ js_handle *js_go(js_vm *vm, Fngo fptr) {
     return make_handle(vm, gObj, V8GO);
 }
 
-static GoCallback *gosend_(js_vm *vm, handle_t hcr, void *data) {
+static GoCallback *gosend_(js_vm *vm, js_hndl hcr, void *data) {
     GoCallback *cb = new GoCallback;
     cb->h = hcr;
     cb->data = data;
@@ -349,18 +349,18 @@ static GoCallback *gosend_(js_vm *vm, handle_t hcr, void *data) {
 // gosend(vm, coro, data)
 //  Defer verifying handle to avoid lock contention.
 
-int js_gosend(js_vm *vm, handle_t hcr, void *data) {
+int js_gosend(js_vm *vm, js_hndl hcr, void *data) {
     return (gosend_(vm, hcr, data) != nullptr);
 }
 
-int js_goerr(js_vm *vm, handle_t hcr, char *message) {
+int js_goerr(js_vm *vm, js_hndl hcr, char *message) {
     GoCallback *cb = gosend_(vm, hcr, reinterpret_cast<void *>(message));
     if (cb)
         cb->flags = GoError;
     return (cb != nullptr);
 }
 
-int js_godone(js_vm *vm, handle_t hcr) {
+int js_godone(js_vm *vm, js_hndl hcr) {
     GoCallback *cb = gosend_(vm, hcr, nullptr);
     if (cb)
         cb->flags = GoDone;
@@ -1455,7 +1455,10 @@ static struct js_dlfn_s dlfns = {
     from_double,
     from_pointer,
     call_str,
-    js_errstr
+    js_errstr,
+    js_gosend,
+    js_goerr,
+    js_godone,
 };
 
 
