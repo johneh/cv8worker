@@ -73,4 +73,16 @@ extern const char *js_errstr(js_vm *vm);
 
 extern int js_gc(js_vm *vm);
 
+
+/* Experimental */
+
+extern js_hndl js_num(js_vm *vm, double d);
+extern double js_tonum(js_vm *vm, js_hndl h);
+extern js_hndl js_str(js_vm *vm, const char *stptr, int length);
+extern char *js_tostr(js_vm *vm, js_hndl h);    // should be freed
+extern js_hndl js_ptr(js_vm *vm, void *ptr);
+extern void *js_toptr(js_vm *vm, js_hndl h);
+
+extern void js_delete(js_vm *vm, js_hndl h);
+
 #endif

@@ -41,53 +41,58 @@ unsigned PersistentStore::Set(v8Value value) {
     HandleScope handle_scope(isolate_);
     unsigned slot = FindSlot();
 
-    if (slot >= size_) {
-        v8Context context = isolate_->GetCurrentContext();
-        unsigned new_size = 2 * size_;
-        v8Object o2 = MakeContainer((int) new_size);
-        v8Object o1 = v8Object::New(isolate_, container_);
-        for (unsigned i = 0; i < size_; i++) {
-            o2->Set(context, i,
-                    o1->Get(context, i).ToLocalChecked()).FromJust();
-        }
-        size_ = new_size;
-        container_.Reset(isolate_, o2);
-        assert(na_ == size_/BITWIDTH);
+    js_vm *vm = reinterpret_cast<js_vm*>(isolate_->GetData(0));
+    v8Context context = v8Context::New(isolate_, vm->context);
+    Context::Scope context_scope(context);
+
+    if (slot == size_) {
+        //  Performance Tips for JavaScript in V8
+        //  https://www.html5rocks.com/en/tutorials/speed/v8/
+        //      Use contiguous keys starting at 0 for Arrays.
+        //      Don't pre-allocate large Arrays (e.g. > 64K elements)
+        //       to their maximum size, instead grow as you go.
+        //      Don't delete elements in arrays, especially numeric arrays.
+        //      Don't load uninitialized or deleted elements.
+
+        size_++;
     }
 
-    bool success = v8Object::New(isolate_, container_)->Set(
-                    isolate_->GetCurrentContext(), slot, value).FromJust();
+    bool success = v8Object::New(isolate_, container_)
+                            -> Set(context, slot, value).FromJust();
     assert(success);    // It is writable. Right?
     return slot;
 }
 
 v8Value PersistentStore::Get(unsigned slot) {
-    EscapableHandleScope handle_scope(isolate_);
-    v8Value v;
     if (!IsSlotMarked(a_, size_, slot))
-        v = v8::Undefined(isolate_);
-    else
-        v = v8Object::New(isolate_, container_)->Get(
-            isolate_->GetCurrentContext(), slot).ToLocalChecked();
+        return v8Value();
+    EscapableHandleScope handle_scope(isolate_);
+    js_vm *vm = reinterpret_cast<js_vm*>(isolate_->GetData(0));
+    v8Context context = v8Context::New(isolate_, vm->context);
+    Context::Scope context_scope(context);
+    v8Value v = v8Object::New(isolate_, container_)
+                    ->Get(context, slot).ToLocalChecked();
     return handle_scope.Escape(v);
 }
 
 void PersistentStore::Dispose(unsigned slot) {
-    if (!IsSlotMarked(a_, size_, slot))
-        return;
-    HandleScope handle_scope(isolate_);
-    v8Object::New(isolate_, container_)
-                    -> Set(isolate_->GetCurrentContext(),
-                            slot, v8::Undefined(isolate_)).FromJust();
-    ClearSlot(a_, slot);
+    if (IsSlotMarked(a_, size_, slot)) {
+        HandleScope handle_scope(isolate_);
+        js_vm *vm = reinterpret_cast<js_vm*>(isolate_->GetData(0));
+        v8Context context = v8Context::New(isolate_, vm->context);
+        Context::Scope context_scope(context);
+        v8Object::New(isolate_, container_)->Set(context,
+                        slot, v8::Undefined(isolate_)).FromJust();
+        ClearSlot(a_, slot);
+    }
 }
 
 int PersistentStore::FindSlot() {
-    unsigned i, sz = na_;
-    for (i = 0; i < sz; i++) {
+    unsigned i, n = na_;
+    for (i = 0; i < n; i++) {
         uint32_t k = ~a_[i];
         if (k != 0) {
-            unsigned j = __builtin_ffs(k);
+            unsigned j = __builtin_ffs(k); // find first set (one)
             j += (i * BITWIDTH - 1);
             MarkSlot(a_, j);
             return j;
@@ -97,8 +102,8 @@ int PersistentStore::FindSlot() {
     // enlarge the bit-array
     na_ *= 2;
     a_ = (uint32_t *) erealloc(a_, na_ * BITSIZE);
-    memset((void*)&a_[sz], '\0', sz * BITSIZE); 
-    unsigned j = sz * BITWIDTH;
+    memset((void*)&a_[n], '\0', n * BITSIZE);
+    unsigned j = n * BITWIDTH;
     MarkSlot(a_, j);
     return j;
 }

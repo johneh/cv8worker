@@ -143,7 +143,7 @@ static v8Object NewGo(js_vm *vm, void *fptr) {
 }
 
 static v8Object ToGo(v8Value v) {
-    if (v->IsObject()) {
+    if (!v.IsEmpty() && v->IsObject()) {
         v8Object cr = v8Object::Cast(v);
         if (cr->InternalFieldCount() == GOROUTINE_INTERNAL_FIELD_COUNT
             && (V8GO == static_cast<int>(reinterpret_cast<uintptr_t>(
@@ -1636,7 +1636,7 @@ static void CreateIsolate(js_vm *vm) {
     vm->global_handle->flags |= PERM_HANDLE;
 
     // Initial size should be some multiple of 32.
-    vm->store_ = new PersistentStore(isolate, 256);
+    vm->store_ = new PersistentStore(isolate, 1024);
 }
 
 // Runs in the worker(V8) thread.
@@ -1646,4 +1646,83 @@ int js8_vminit(js_vm *vm) {
     return 0;
 }
 
+
+/* Experimental */
+
+js_hndl js_num(js_vm *vm, double d) {
+    Isolate *isolate = vm->isolate;
+    LOCK_SCOPE(isolate)
+    return vm->store_->Set(Number::New(isolate, d));
 }
+
+double js_tonum(js_vm *vm, js_hndl h) {
+    Isolate *isolate = vm->isolate;
+    LOCK_SCOPE(isolate)
+    v8Value v = vm->store_->Get(h);
+    if (v.IsEmpty()) {
+        js_set_errstr(vm, "js_tonum: invalid handle");
+        return 0;
+    }
+    v8Context context = v8Context::New(isolate, vm->context);
+    return v->NumberValue(context).FromJust();
+}
+
+js_hndl js_str(js_vm *vm, const char *stptr, int length) {
+    Isolate *isolate = vm->isolate;
+    LOCK_SCOPE(isolate)
+    assert(stptr);
+    if (length < 0)
+        length = strlen(stptr);
+    return vm->store_->Set(String::NewFromUtf8(isolate, stptr,
+                            v8::String::kNormalString, length));
+}
+
+char *js_tostr(js_vm *vm, js_hndl h) {
+    Isolate *isolate = vm->isolate;
+    LOCK_SCOPE(isolate)
+    v8Value v = vm->store_->Get(h);
+    if (v.IsEmpty()) {
+        js_set_errstr(vm, "js_tostr: invalid handle");
+        return nullptr;
+    }
+    v8Context context = v8Context::New(isolate, vm->context);
+    String::Utf8Value stval(v->ToString(context).ToLocalChecked());
+    /* return empty string if there was an error during conversion. */
+    return estrdup(*stval, stval.length());
+}
+
+js_hndl js_ptr(js_vm *vm, void *ptr) {
+    /* FIXME  if (!ptr)
+        return vm->nullptr_handle; */
+    Isolate *isolate = vm->isolate;
+    LOCK_SCOPE(isolate)
+    v8Context context = v8Context::New(isolate, vm->context);
+    Context::Scope context_scope(context);
+    return vm->store_->Set(WrapPtr(vm, ptr));
+}
+
+void *js_toptr(js_vm *vm, js_hndl h) {
+    Isolate *isolate = vm->isolate;
+    LOCK_SCOPE(isolate)
+    v8Value v = vm->store_->Get(h);
+    if (v.IsEmpty()) {
+        js_set_errstr(vm, "js_toptr: invalid handle");
+        return nullptr;
+    }
+    v8Object obj = ToPtr(v);
+    if (obj.IsEmpty()) {
+        js_set_errstr(vm, "js_toptr: pointer argument expected");
+        return nullptr;
+    }
+    // Clear error
+    js_set_errstr(vm, nullptr);
+    return UnwrapPtr(obj);
+}
+
+void js_delete(js_vm *vm, js_hndl h) {
+    Isolate *isolate = vm->isolate;
+    LOCK_SCOPE(isolate)
+    vm->store_->Dispose(h);
+}
+
+} // extern "C"

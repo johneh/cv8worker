@@ -12,6 +12,12 @@ endif
 
 all: $(BINS)
 
+words.o: $(TOPDIR)/jsv8.h $(TOPDIR)/jsdef.h words.c
+	$(CC) $(CFLAGS) $(EXTRA_FLAGS) $(INCLUDES) -c words.c
+
+words: words.o $(TOPDIR)/libcv8.a
+	$(CC) -o $@ $^ $(LIBS)
+
 testjs.o: $(TOPDIR)/jsv8.h $(TOPDIR)/jsdef.h testjs.c
 	$(CC) $(CFLAGS) $(EXTRA_FLAGS) $(INCLUDES) -c testjs.c
 
