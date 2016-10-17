@@ -1,27 +1,27 @@
 #ifndef _JSDEF_H
 #define _JSDEF_H
 
-typedef int js_hndl;
+typedef int v8_handle;
 
 struct js_vm_s;
 typedef struct js_vm_s js_vm;
+typedef js_vm *v8_state;
 
-struct js_handle_s;
-typedef struct js_handle_s js_handle;
-
-typedef void (*Fngo)(js_vm *vm, js_hndl coro, void *data);
+typedef void (*Fngo)(js_vm *vm, v8_handle coro, void *data);
 
 typedef void (*Fnfree)(void *ptr);
-typedef js_handle *(*Fnfnwrap)(js_vm *, int, js_handle *[]);
 
-struct cffn_s {
+typedef v8_handle (*Fnfnwrap)(js_vm *, int, v8_handle []);
+
+typedef struct v8_ffn_s {
     int pcount;
     void *fp;
     const char *name;
     int flags;
 #define JSV8_DLFUNC  (1<<0)
 #define JSV8_DLCORO  (1<<1)
-};
+} v8_ffn;
 
-typedef struct cffn_s js_ffn;
+typedef v8_handle v8_args[4];
+
 #endif

@@ -242,7 +242,7 @@ void LongCntl(const v8::FunctionCallbackInfo<v8::Value>& args) {
             sprintf(buf, "%" PRId64, i1.val.i64);
         else
             sprintf(buf, "%" PRIu64, i1.val.u64);
-        args.GetReturnValue().Set(v8_str(isolate, buf));
+        args.GetReturnValue().Set(V8_STR(isolate, buf));
     }
         break;
     case LONG_TONUMBER: {
@@ -404,7 +404,7 @@ Local<FunctionTemplate> LongTemplate(js_vm *vm) {
     Local<FunctionTemplate> long_templ = FunctionTemplate::New(isolate, Long);
     for (unsigned i = 0; long_cmds[i].name; i++) {
         // Only primitive values are allowed!
-        long_templ->Set(v8_str(isolate, long_cmds[i].name),
+        long_templ->Set(V8_STR(isolate, long_cmds[i].name),
                 Integer::New(isolate, long_cmds[i].cmd));
     }
     return handle_scope.Escape(long_templ);

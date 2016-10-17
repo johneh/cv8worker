@@ -14,70 +14,70 @@
 
 static char *readfile(const char *filename, size_t *len);
 
-void js_panic(js_vm *vm) {
-    fprintf(stderr, "%s\n", js_errstr(vm));
+void js_panic(v8_state vm) {
+    fprintf(stderr, "%s\n", v8_errstr(vm));
     exit(1);
 }
 
-js_handle *ff_readfile(js_vm *vm, int argc, js_handle *argv[]) {
-    const char *filename = js_tostring(argv[0]);
+v8_handle ff_readfile(v8_state vm, int argc, v8_handle argv[]) {
+    const char *filename = v8_tostring(vm, argv[1]);
     size_t sz;
     char *buf = readfile(filename, & sz);
-    js_handle *ret;
+    v8_handle ret;
     if (buf) {
-        ret = js_string(vm, buf, sz);
+        ret = v8_string(vm, buf, sz);
         free(buf);
     } else
-        ret = JSNULL(vm);
+        ret = v8_null(vm);
     return ret;
 }
 
-js_handle *ff_realpath(js_vm *vm, int argc, js_handle *argv[]) {
-    const char *path = js_tostring(argv[0]);
+v8_handle ff_realpath(v8_state vm, int argc, v8_handle argv[]) {
+    const char *path = v8_tostring(vm, argv[1]);
     char *resolved_path = realpath(path, NULL);
-    js_handle *ret;
+    v8_handle ret;
     if (resolved_path) {
-        ret = js_string(vm, resolved_path, strlen(resolved_path));
+        ret = v8_string(vm, resolved_path, strlen(resolved_path));
         free(resolved_path);
     } else
-        ret = JSNULL(vm);
+        ret = v8_null(vm);
     return ret;
 }
 
-js_handle *ff_isfile(js_vm *vm, int argc, js_handle *argv[]) {
-    const char *path = js_tostring(argv[0]);
+v8_handle ff_isfile(v8_state vm, int argc, v8_handle argv[]) {
+    const char *path = v8_tostring(vm, argv[1]);
     struct stat sbuf;
     int ret = 0;
     if (path && stat(path, & sbuf) == 0) {
         if (S_ISREG(sbuf.st_mode))
             ret = 1;
     }
-    return js_number(vm, ret);
+    return v8_number(vm, ret);
 }
 
-static js_ffn ff_table[] = {
+static v8_ffn ff_table[] = {
     { 1, ff_readfile, "readFile" },
     { 1, ff_realpath, "realPath" },
     { 1, ff_isfile, "isRegularFile" },
 };
 
-/* Create an object with the exported C functions */
-js_handle *exports(js_vm *vm) {
+/* Return an object with the exported C functions */
+v8_handle exports(v8_state vm) {
     int i;
     int n = sizeof (ff_table) / sizeof (ff_table[0]);
-    js_handle *h1 = js_object(vm);
+    v8_handle h1 = v8_object(vm);
     for (i = 0; i < n; i++) {
-        js_handle *f1 = js_cfunc(vm, &ff_table[i]);
-        if (! js_set(h1, ff_table[i].name, f1))
+        v8_handle f1 = v8_cfunc(vm, &ff_table[i]);
+        if (! v8_set(vm, h1, ff_table[i].name, f1))
             js_panic(vm);
-        js_reset(f1);
+        v8_reset(vm, f1);
     }
     return h1;
 }
 
-js_handle *parse_args(js_vm *vm, int argc, char **argv, char **path) {
-    js_handle *hargs = js_array(vm, argc);
-    js_handle *hs;
+v8_handle parse_args(v8_state vm, int argc, char **argv, char **path) {
+    v8_handle hargs = v8_array(vm, argc);
+    v8_handle hs;
     int i;
     *path = NULL;
     for (i = 1; i < argc; i++) {
@@ -87,11 +87,18 @@ js_handle *parse_args(js_vm *vm, int argc, char **argv, char **path) {
             *path = argv[++i];
             continue;
         }
-        hs = js_string(vm, argv[i], strlen(argv[i]));
-        js_seti(hargs, i-1, hs);
-        js_reset(hs);
+        hs = v8_string(vm, argv[i], strlen(argv[i]));
+        v8_seti(vm, hargs, i-1, hs);
+        v8_reset(vm, hs);
     }
     return hargs;
+}
+
+coroutine void set_timeout(v8_state vm, v8_handle hcr, void *p1) {
+    int64_t delay = *((int64_t *) p1);
+    mill_sleep(now()+delay);
+    v8_gosend(vm, hcr, NULL);
+    v8_godone(vm, hcr);
 }
 
 #ifndef MODULEPATH
@@ -100,7 +107,7 @@ js_handle *parse_args(js_vm *vm, int argc, char **argv, char **path) {
 
 static char fmt_src[] = "(function (loader, argv) {"
 "var file = '%s/%s'; var s1 = loader.readFile(file);"
-"if(s1 === null) throw new Error(file+': file not found');"
+"if(s1 === null) throw new Error('error reading file: ' + file);"
 "$eval(s1, file).call(this, loader, argv);})";
 
 int main(int argc, char **argv) {
@@ -113,14 +120,21 @@ int main(int argc, char **argv) {
     mill_init(-1, 0);
     mill_worker w = mill_worker_create();
     assert(w);
-    js_vm *vm = js_vmopen(w);
+    v8_state vm = js_vmopen(w);
 
     char *libpath = NULL;
-    js_handle *hargs = parse_args(vm, argc, argv, &libpath);
-    js_handle *hldr = exports(vm);
+    v8_handle hargs = parse_args(vm, argc, argv, &libpath);
+    v8_handle loader = exports(vm);
     if (!libpath)   /* TODO: path from an enviroment variable */
         libpath = MODULEPATH;
-    js_set_string(hldr, "path", libpath);
+
+    v8_handle htmp = v8_string(vm, libpath, -1);
+    v8_set(vm, loader, "path", htmp);
+    v8_reset(vm, htmp);
+
+    htmp = v8_go(vm, set_timeout);
+    v8_set(vm, loader, "msleep", htmp);
+    v8_reset(vm, htmp);
 
     char *mainpath = strdup(libpath);
     assert(mainpath);
@@ -134,13 +148,13 @@ int main(int argc, char **argv) {
     snprintf(s, PATH_MAX+256, fmt_src, mainpath, "__main__.js");
     free(mainpath);
 
-    js_handle *hret = js_callstr(vm, s, JSGLOBAL(vm),
-            (js_args) { hldr, hargs });
+    v8_handle hret = v8_callstr(vm, s, v8_global(vm),
+                            (v8_args) { loader, hargs });
     if (!hret)
         js_panic(vm);
-    js_reset(hret);
-    js_reset(hldr);
-    js_reset(hargs);
+    v8_reset(vm, hret);
+    v8_reset(vm, loader);
+    v8_reset(vm, hargs);
 
     js_vmclose(vm);
     mill_worker_delete(w);

@@ -22,7 +22,7 @@ store.o: vm.h v8binding.h util.h store.h store.cc
 long.o: v8binding.h vm.h util.h ptr.h long.h long.cc
 	$(CPP) $(CPPFLAGS) $(INCLUDES) -std=c++0x -c long.cc
 
-ptr.o: v8binding.h vm.h util.h ptr.h ptr.cc
+ptr.o: v8binding.h vm.h util.h store.h ptr.h ptr.cc
 	$(CPP) $(CPPFLAGS) $(INCLUDES) -std=c++0x -c ptr.cc
 
 jsv8.o: v8binding.h jsdef.h jsv8.h jsv8.c

@@ -277,6 +277,24 @@ public:
                     && funcDecl->getStorageClass() != clang::StorageClass::SC_Static
             ) {
 #if 0
+                // __attribute__((annotate("coroutine"))) .. 
+                if (decl->hasAttrs()) {
+        for (clang::Decl::attr_iterator attr = decl->attr_begin(),
+			 aEnd = decl->attr_end(); attr != aEnd; ++attr) {
+
+			if (const clang::AnnotateAttr *aa = dyn_cast<clang::AnnotateAttr>(*attr)) {
+                // StringRef shit: instead of str() for std::string,
+                // use data() and size() for C string
+                //
+				cout << '"' << aa->getAnnotation().str() << "\" [" <<
+				  aa->getAnnotationLength() << "]\t";
+			}
+		}
+        cout<<"\n\n";
+                }
+#endif
+
+#if 0
                 const std::string &fileName = m_sm.getFilename(fullLoc);
                 cout << fileName <<":"<<fullLoc.getSpellingLineNumber()<<"\n";
 #endif
@@ -399,7 +417,7 @@ protected:
         }
 
         fprintf(stdout,
-"static void do_%s(js_vm *vm, int argc, js_val argv) {\n",
+"static void do_%s(v8_state vm, int argc, v8_val argv) {\n",
             cname);
 
         // the struct entry for the table of functions
@@ -413,32 +431,32 @@ protected:
     void MakeWrapParam(JsType jsType, int paramNum) {
         switch (jsType) {
         case JsType::Int:
-            fprintf(stdout, "int p%d = js_dl->to_int(vm, %d, argv);\n",
+            fprintf(stdout, "int p%d = v8dl->to_int(vm, %d, argv);\n",
                 paramNum, paramNum+1);
             break;
         case JsType::Uint:
-            fprintf(stdout, "unsigned int p%d = js_dl->to_uint(vm, %d, argv);\n",
+            fprintf(stdout, "unsigned int p%d = v8dl->to_uint(vm, %d, argv);\n",
                 paramNum, paramNum+1);
             break;
         case JsType::Long:
-            fprintf(stdout, "int64_t p%d = js_dl->to_long(vm, %d, argv);\n",
+            fprintf(stdout, "int64_t p%d = v8dl->to_long(vm, %d, argv);\n",
                 paramNum, paramNum+1);
             break;
         case JsType::Ulong:
-            fprintf(stdout, "uint64_t p%d = js_dl->to_uint(vm, %d, argv);\n",
+            fprintf(stdout, "uint64_t p%d = v8dl->to_uint(vm, %d, argv);\n",
                 paramNum, paramNum+1);
             break;
         case JsType::Double:
-            fprintf(stdout, "double p%d = js_dl->to_double(vm, %d, argv);\n",
+            fprintf(stdout, "double p%d = v8dl->to_double(vm, %d, argv);\n",
                 paramNum, paramNum+1);
             break;
         case JsType::String:
-            fprintf(stdout, "char *p%d = js_dl->to_string(vm, %d, argv);\n",
+            fprintf(stdout, "char *p%d = v8dl->to_string(vm, %d, argv);\n",
                 paramNum, paramNum+1);
             break;
         case JsType::VoidPtr:
         case JsType::Ptr:
-            fprintf(stdout, "void *p%d = js_dl->to_pointer(vm, %d, argv);\n",
+            fprintf(stdout, "void *p%d = v8dl->to_pointer(vm, %d, argv);\n",
                 paramNum, paramNum+1);
             break;
         default:
@@ -450,7 +468,7 @@ protected:
             const std::string& fName, unsigned int numParams) {
         std::string ends;
         const char *fname = fName.c_str();
-        fprintf(stdout, "if (js_dl->errstr(vm)) return;\n");
+        fprintf(stdout, "if (v8dl->errstr(vm)) return;\n");
         switch (jsType) {
         case JsType::Void:
             fprintf(stdout, "%s(", fname);
@@ -458,29 +476,29 @@ protected:
             break;
         case JsType::Int:
             fprintf(stdout, "int r = (int) %s(", fname);
-            ends = "js_dl->from_int(vm, r, argv);\n";
+            ends = "v8dl->from_int(vm, r, argv);\n";
             break;
         case JsType::Uint:
             fprintf(stdout, "unsigned int r = (unsigned int) %s(", fname);
-            ends = "js_dl->from_uint(vm, r, argv);\n";
+            ends = "v8dl->from_uint(vm, r, argv);\n";
             break;
         case JsType::Long:
             fprintf(stdout, "int64_t r = (int64_t) %s(", fname);
-            ends = "js_dl->from_long(vm, r, argv);\n";
+            ends = "v8dl->from_long(vm, r, argv);\n";
             break;
         case JsType::Ulong:
             fprintf(stdout, "uint64_t r = (uint64_t) %s(", fname);
-            ends = "js_dl->from_ulong(vm, r, argv);\n";
+            ends = "v8dl->from_ulong(vm, r, argv);\n";
             break;
         case JsType::Double:
             fprintf(stdout, "double r = (double) %s(", fname);
-            ends = "js_dl->from_double(vm, r, argv);\n";
+            ends = "v8dl->from_double(vm, r, argv);\n";
             break;
         case JsType::String:
         case JsType::VoidPtr:
         case JsType::Ptr:
             fprintf(stdout, "void *r = (void *) %s(", fname);
-            ends = "js_dl->from_pointer(vm, r, argv);\n";
+            ends = "v8dl->from_pointer(vm, r, argv);\n";
             break;
         default:
             ASSERT(0 && "MakeWrapEnd(): received unexpected type");
@@ -654,7 +672,7 @@ public:
     }
  
     void EndSourceFileAction() override {
-        fprintf(stdout, "\nstatic js_ffn fntab_[] = {\n%s{0}\n};\n", m_fns.c_str());
+        fprintf(stdout, "\nstatic v8_ffn fntab_[] = {\n%s{0}\n};\n", m_fns.c_str());
         fprintf(stdout, "static const char source_str_[] = \"(function(){\\\n");
         fprintf(stdout, "var _tags = {}, _types = {}, _s;\\\n");
         for (unsigned k = 0; k < m_enums.size(); k++) {
@@ -702,8 +720,8 @@ public:
 
         fprintf(stdout, "this['#tags'] = _tags;this['#types'] = _types;});\";\n\n");
 
-        fprintf(stdout, "int JS_LOAD(js_vm *vm, js_val vobj) {\n");
-        fprintf(stdout, "int rc = dl_->call_str(vm, source_str_, vobj);\n");
+        fprintf(stdout, "int JS_LOAD(v8_state vm, v8_val vobj) {\n");
+        fprintf(stdout, "int rc = v8dl->call_str(vm, source_str_, vobj);\n");
         fprintf(stdout, "if (!rc) return -1;\n");
         fprintf(stdout, "JS_EXPORT(fntab_);\n}\n");
     }

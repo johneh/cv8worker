@@ -7,8 +7,6 @@
 #include <fcntl.h>
 #include <assert.h>
 
-// XXX: include libmill before v8_binding.h (need choose macro)
-#define MILL_CHOOSE 1
 #include "libmill.h"
 
 #include "v8binding.h"
@@ -31,93 +29,81 @@ js_vm *js_vmopen(js_worker jw) {
 
 void js_vmclose(js_vm *vm) {
     /* Close the write end of the pipe from the V8 thread. */
-    (void) js_run(vm, "$close();");
+    (void) v8_run(vm, "$close();");
     js8_vmclose(vm);
 }
 
-static int js_sched(struct js8_arg_s *args) {
-    if (mill_isself(WORKER(args->vm)))
-        return js8_do(args);
-    return task_run(WORKER(args->vm), (void *) js8_do, args, -1);
+static int v8_sched(struct js8_cmd_s *cmd) {
+    if (mill_isself(WORKER(cmd->vm)))
+        return js8_do(cmd);
+    return task_run(WORKER(cmd->vm), (void *) js8_do, cmd, -1);
 }
 
 /* Returns NULL if there was an error in V8. */
-js_handle *js_eval(js_vm *vm, const char *src) {
-    struct js8_arg_s args;
-    args.type = V8COMPILERUN;
-    args.vm = vm;
-    args.source = (char *) src;
-    js_sched(&args);
-    return args.h;
+v8_handle v8_eval(js_vm *vm, const char *src) {
+    struct js8_cmd_s c;
+    c.type = V8COMPILERUN;
+    c.vm = vm;
+    c.source = (char *) src;
+    v8_sched(&c);
+    return c.h;
 }
 
-int js_run(js_vm *vm, const char *src) {
-    js_handle *h = js_eval(vm, src);
+int v8_run(js_vm *vm, const char *src) {
+    v8_handle h = v8_eval(vm, src);
     if (!h)
         return 0;
-    js_reset(h);
+    v8_reset(vm, h);
     return 1;
 }
 
 //
-// js_call(vm, func, NULL, (js_args){0})
+// v8_call(vm, func, NULL, (v8_args){0})
 // -> this === Global and 0 args
 //
 /* Returns NULL if there was an error in V8. */
-js_handle *js_call(js_vm *vm, js_handle *hfunc,
-        js_handle *hself, js_args hargs) {
-    struct js8_arg_s args;
-    args.type = V8CALL;
-    args.vm = vm;
-    args.h1 = hfunc;
+v8_handle v8_call(js_vm *vm, v8_handle hfunc,
+            v8_handle hself, v8_args hargs) {
+    struct js8_cmd_s c;
+    c.type = V8CALL;
+    c.vm = vm;
+    c.h1 = hfunc;
     int i, nargs = 0;
-    for(i = 0; i < 4 && hargs[i]; i++) {
+    for (i = 0; i < 4 && hargs[i]; i++) {
         nargs++;
-        args.a[i] = hargs[i];
+        c.a[i] = hargs[i];
     }
-    args.nargs = nargs;
-    args.h = hself;
-    js_sched(&args);
-    return args.h;
+    c.nargs = nargs;
+    c.h = hself;
+    v8_sched(&c);
+    return c.h;
 }
 
 /* SOURCE is a function expression.
  Returns NULL if there was an error in V8. */
-js_handle *js_callstr(js_vm *vm, const char *source,
-        js_handle *hself, js_args hargs) {
-    struct js8_arg_s args;
-    args.type = V8CALLSTR;
+v8_handle v8_callstr(js_vm *vm, const char *source,
+            v8_handle hself, v8_args hargs) {
+    struct js8_cmd_s c;
+    c.type = V8CALLSTR;
     assert(source);
-    args.vm = vm;
-    args.source = (char *)source;
+    c.vm = vm;
+    c.source = (char *)source;
     int i, nargs = 0;
-    for(i = 0; i < 4 && hargs[i]; i++) {
+    for (i = 0; i < 4 && hargs[i]; i++) {
         nargs++;
-        args.a[i] = hargs[i];
+        c.a[i] = hargs[i];
     }
-    args.nargs = nargs;
-    args.h = hself;
-    js_sched(&args);
-    return args.h;
+    c.nargs = nargs;
+    c.h = hself;
+    v8_sched(&c);
+    return c.h;
 }
 
-int js_gc(js_vm *vm) {
-    struct js8_arg_s args;
-    args.type = V8GC;
-    args.vm = vm;
-    js_sched(&args);
-    return args.weak_counter;
-}
-
-void *choose_coro(chan ch) {
-    void *t = NULL;
-    choose {
-    in(ch, js_handle *, t1):
-        t = t1;
-    otherwise:
-        t = NULL;
-    end
-    }
-    return t;
+int v8_gc(js_vm *vm) {
+    struct js8_cmd_s c;
+    c.type = V8GC;
+    c.vm = vm;
+    v8_sched(&c);
+    return c.weak_counter;
 }
 

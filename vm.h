@@ -19,10 +19,12 @@ struct js_vm_s {
     chan ch;
     int ncoro;
 
-    struct js_handle_s *global_handle;
-    struct js_handle_s *null_handle;
-    struct js_handle_s *undef_handle;
-    struct js_handle_s *nullptr_handle;
+    v8_handle global_handle;
+    v8_handle null_handle;
+    v8_handle undef_handle;
+    v8_handle nullptr_handle;
+
+#define NUM_PERMANENT_HANDLES   4
 
     v8::Persistent<v8::Context> context;
     v8::Persistent<v8::ObjectTemplate> extptr_template;
@@ -39,45 +41,12 @@ struct js_vm_s {
     char *dlstr[MAXARGS];
     int dlstr_idx;
 
-    js_handle *args[MAXARGS];
 #ifdef V8TEST
     int weak_counter;
 #endif
 };
 
 typedef struct js_vm_s js_vm;
-
-struct js_handle_s {
-    enum js_code type;
-    int flags;
-#define PERM_HANDLE (1 << 0)
-#define DBL_HANDLE  (1 << 1)
-#define STR_HANDLE  (1 << 2)
-#define INT32_HANDLE    (1 << 3)
-#define PTR_HANDLE  (1 << 4)
-#define VALUE_MASK (DBL_HANDLE|STR_HANDLE|INT32_HANDLE|PTR_HANDLE)
-#define ARG_HANDLE  (1 << 5)
-#define WEAK_HANDLE (1 << 6)
-#define FREE_EXTWRAP    (1 << 7)
-#define FREE_DLWRAP (1 << 8)
-#define ERROR_HANDLE    (1 << 9)
-
-    union {
-        double d;
-        char *stp;
-        int32_t i;
-        void *ptr;
-    };
-    js_vm *vm;
-    union {
-        Fnfree free_func;
-        struct js_handle_s *(*free_extwrap)(js_vm *, int, struct js_handle_s *[]);
-        void (*free_dlwrap)(js_vm *, int, void *argv);
-        js_handle *hp;
-    };
-    v8::Persistent<v8::Value> handle;
-};
-
 
 #define LOCK_SCOPE(isolate) \
 Locker locker(isolate); \
@@ -103,7 +72,7 @@ isolate->ThrowException(Exception::Error(\
     String::NewFromUtf8(isolate, (m))));\
 return; } while(0)
 
-static inline v8::Local<v8::String> v8_str(v8::Isolate* isolate,
+static inline v8::Local<v8::String> V8_STR(v8::Isolate* isolate,
             const char* x) {
   return v8::String::NewFromUtf8(isolate, x, v8::NewStringType::kNormal)
       .ToLocalChecked();

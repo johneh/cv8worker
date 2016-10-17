@@ -11,15 +11,16 @@
 #include "libmill.h"
 #include "jsv8.h"
 
-void js_panic(js_vm *vm) {
-    fprintf(stderr, "%s\n", js_errstr(vm));
+void js_panic(v8_state vm) {
+    fprintf(stderr, "%s\n", v8_errstr(vm));
     exit(1);
 }
 #define CHECK(rc, vm) if(!rc) js_panic(vm)
 
 
-void testcall(js_vm *vm) {
-    js_handle *list_props = js_eval(vm,
+void testcall(v8_state vm) {
+    printf("testcall .....\n");
+    v8_handle list_props = v8_eval(vm,
 "(function (o){\n\
     let objToInspect;\n\
     let res = [];\n\
@@ -34,49 +35,49 @@ void testcall(js_vm *vm) {
 )");
 
     CHECK(list_props, vm);
-    assert(js_isfunction(list_props));
-    js_handle *h1 = js_call(vm, list_props, NULL,
-                        (js_args) { JSGLOBAL(vm) });
+    v8_handle h1 = v8_call(vm, list_props, 0,
+                        (v8_args) { v8_global(vm) });
     CHECK(h1, vm);
-    js_reset(h1);
-    js_reset(list_props);
+    v8_reset(vm, h1);
+    v8_reset(vm, list_props);
 }
 
-coroutine void do_task1(js_vm *vm, js_hndl hcr, void *data) {
+coroutine void do_task1(v8_state vm, v8_handle hcr, void *data) {
     const char *s1 = data;
     fprintf(stderr, "<- %s\n", s1);
     int k = random() % 50;
     mill_sleep(now() + k);
     char *tmp = malloc(100);
     sprintf(tmp, "%s -> Task done in %d millsecs ...", s1, k);
-    js_gosend(vm, hcr, tmp);
-    js_godone(vm, hcr);
+    v8_gosend(vm, hcr, tmp);
+    v8_godone(vm, hcr);
 }
 
-
-/* Coroutine in the main thread (concurrency & parallelism) */
-void testgo(js_vm *vm) {
-    js_handle *cr = js_go(vm, do_task1);
+void testgo(v8_state vm) {
+    printf("testgo .....\n");
+    v8_handle cr = v8_go(vm, do_task1);
     /* cr is a js object, can set properties on it */
-    int r = js_set_string(cr, "name", "task1");
+    v8_handle t1 = v8_string(vm, "task1", -1);
+    int r = v8_set(vm, cr, "name", t1);
     assert(r);
+    v8_reset(vm, t1);
 
-    js_handle *f1 = js_callstr(vm, "(function(co) {\
+    v8_handle f1 = v8_callstr(vm, "(function(co) {\
         $print('co name =', co.name); \
         return function(s, callback) {\
             $go(co, s, callback);\
         };\
-    });", NULL, (js_args) { cr } );
+    });", 0, (v8_args) { cr } );
     assert(f1);
 
     /* Global.task1 = f1; */
-    int rc = js_set(JSGLOBAL(vm), "task1", f1);
+    int rc = v8_set(vm, v8_global(vm), "task1", f1);
     assert(rc);
-    js_reset(f1);
-    js_reset(cr);
+    v8_reset(vm, f1);
+    v8_reset(vm, cr);
 
-    // XXX: 300 go routines to test resizing the persistent store
-    rc = js_run(vm,
+    // XXX: 300 go routines to test resizing of the persistent store
+    rc = v8_run(vm,
 "function foo(k) { var s=0; for (var i=0;i <k;i++){s+=i;}return s;}"
 "for(var i=1; i<=5;i++) {\n\
     var s1=$malloc(10); s1.pack(0, 's', 'go' + i);s1.dispose();\n\
@@ -97,57 +98,57 @@ void testgo(js_vm *vm) {
     );
     CHECK(rc, vm);
 #if 0
-    int weak_counter = js_gc(vm);
+    int weak_counter = v8_gc(vm);
     printf("weak counter = %d\n", weak_counter);
 #endif
 }
 
 static char *readfile(const char *filename, size_t *len);
 
-js_handle *ff_readfile(js_vm *vm, int argc, js_handle *argv[]) {
-    const char *filename = js_tostring(argv[0]);
+v8_handle ff_readfile(v8_state vm, int argc, v8_handle argv[]) {
+    const char *filename = v8_tostring(vm, argv[1]);
     size_t sz;
     char *buf = readfile(filename, & sz);
-    js_handle *ret;
+    v8_handle ret;
     if (buf) {
-        ret = js_string(vm, buf, sz);
+        ret = v8_string(vm, buf, sz);
         free(buf);
     } else
-        ret = JSNULL(vm);
+        ret = v8_null(vm);
     return ret;
 }
 
-js_handle *ff_strerror(js_vm *vm, int argc, js_handle *argv[]) {
-    int errnum = (int) js_tonumber(argv[0]);
+v8_handle ff_strerror(v8_state vm, int argc, v8_handle argv[]) {
+    int errnum = (int) v8_tonumber(vm, argv[1]);
     char *s = strerror(errnum);
-    js_handle *ret = js_string(vm, s, -1);
-    return ret;
+    return v8_string(vm, s, -1);
 }
 
-static js_ffn ff_table[] = {
+static v8_ffn ff_table[] = {
     { 1, ff_readfile, "readfile" },
     { 1, ff_strerror, "strerror" },
 };
 
 /* Create an object with the exported C functions */
-js_handle *exports(js_vm *vm) {
+v8_handle exports(v8_state vm) {
     int i;
     int n = sizeof (ff_table) / sizeof (ff_table[0]);
-    js_handle *h1 = js_object(vm);
+    v8_handle h1 = v8_object(vm);
     for (i = 0; i < n; i++) {
-        js_handle *f1 = js_cfunc(vm, &ff_table[i]);
-        if (! js_set(h1, ff_table[i].name, f1))
+        v8_handle f1 = v8_cfunc(vm, &ff_table[i]);
+        if (! v8_set(vm, h1, ff_table[i].name, f1))
             js_panic(vm);
-        js_reset(f1);
+        v8_reset(vm, f1);
     }
     return h1;
 }
 
-void testexports(js_vm *vm) {
-    js_handle *eh = exports(vm);
-    js_set(JSGLOBAL(vm), "c", eh);
-    js_reset(eh);
-    int rc = js_run(vm, "(function(filename) {\n\
+void testexports(v8_state vm) {
+    printf("testexports .....\n");
+    v8_handle eh = exports(vm);
+    v8_set(vm, v8_global(vm), "c", eh);
+    v8_reset(vm, eh);
+    int rc = v8_run(vm, "(function(filename) {\n\
 var s = c.readfile(filename);\n\
 if (s !== null) $print(filename + ' size = ' + s.length);\n\
 else throw new Error(c.strerror($errno));})('./testjs.c');"
@@ -155,34 +156,35 @@ else throw new Error(c.strerror($errno));})('./testjs.c');"
     CHECK(rc, vm);
 }
 
-void testarraybuffer(js_vm *vm) {
+void testarraybuffer(v8_state vm) {
+    printf("testarraybuffer .....\n");
     void *p1 = malloc(16);  // Memory must come from malloc().
     assert(p1);
-    js_handle *h2 = js_arraybuffer(vm, p1, 16);
+    v8_handle h2 = v8_arraybuffer(vm, p1, 16);
     CHECK(h2, vm);
-    printf("byteLength = %d\n", (int) js_bytelength(h2));
+    printf("byteLength = %d\n", (int) v8_bytelength(vm, h2));
 
-    js_handle *h3 = js_callstr(vm, "(function(ab){\n\
+    v8_handle h3 = v8_callstr(vm, "(function(ab){\n\
 var ia = new Int32Array(ab);\n\
 ia[0] = 11; ia[1] = 22; ia[2] = 33; ia[3] = 44;\n\
-$print(ia); return ia;});\n", NULL, (js_args) { h2 });
+$print(ia); return ia;});\n", 0, (v8_args) { h2 });
     CHECK(h3, vm);
-    assert(js_isobject(h3));
-    printf("byteLength = %d\n", (int) js_bytelength(h3));
-    js_handle *h4 = js_getbuffer(h3);
+    printf("byteLength = %d\n", (int) v8_bytelength(vm, h3));
+    v8_handle h4 = v8_getbuffer(vm, h3);
     CHECK(h4, vm);
-    printf("byteLength = %d\n", (int) js_bytelength(h4));
-    void *p2 = js_topointer(h2);
+    printf("byteLength = %d\n", (int) v8_bytelength(vm, h4));
+    void *p2 = v8_topointer(vm, h2);
     assert(p1 == p2);
-    p2 = js_externalize(h2);    // Living dangerously.
+    p2 = v8_externalize(vm, h2);    // Living dangerously.
     assert(p1 == p2);
-    js_reset(h2);
-    js_reset(h3);
-    js_reset(h4);
-    js_gc(vm);
+    v8_reset(vm, h2);
+    v8_reset(vm, h3);
+    v8_reset(vm, h4);
+    v8_gc(vm);
     free(p1);   // no references to the array buffer left(?) or needed.
 }
 
+#if 0
 static int free_count;
 js_handle *ff_efree(js_vm *vm, int argc, js_handle *argv[]) {
     void *ptr = js_topointer(argv[0]);
@@ -215,10 +217,11 @@ p1.free();p1=$malloc(8);p1.dispose(efree);});",
     js_gc(vm);
     assert(free_count == 2);
 }
+#endif
 
 /* make GCTEST=1 */
-void testdll(js_vm *vm) {
-    int rc = js_run(vm, "(function() {\
+void testdll(v8_state vm) {
+    int rc = v8_run(vm, "(function() {\
 var cairo = $load('./libcairojs.so');\
 var surface = cairo.image_surface_create(\
                     cairo.CAIRO_FORMAT_ARGB32, 120, 100).notNull();\
@@ -233,17 +236,18 @@ cairo.surface_write_to_png(surface, 'crect.png');\
 /*cairo.surface_destroy(surface);*/})();"
     );
     CHECK(rc, vm);
-    int weak_counter = js_gc(vm);
+    int weak_counter = v8_gc(vm);
     assert(weak_counter == 2);
 }
 
 
-void testpack(js_vm *vm) {
+void testpack(v8_state vm) {
+    printf("testpack .....\n");
     void *ptr = malloc(256);
     assert(ptr);
-    js_handle *p1 = js_pointer(vm, ptr);
+    v8_handle p1 = v8_pointer(vm, ptr);
     CHECK(p1, vm);
-    js_handle *r1 = js_callstr(vm, "var w = new WeakMap();\n\
+    v8_handle r1 = v8_callstr(vm, "var w = new WeakMap();\n\
     (function(p) {\n\
         var a = new Int32Array([-1,-2,-3,-4]);\n\
         p.pack(0, 'idsia', 10, 3.1416, 'apple banana', 1, a);\n\
@@ -263,37 +267,36 @@ void testpack(js_vm *vm) {
         /* With 'A', need to keep a reference to the pointer P. */\n\
         w.set(ab, p); /* keeps P alive as long as AB is not garbage collected */\n\
         return ab;\n\
-    });", NULL, (js_args) { p1 } );
+    });", 0, (v8_args) { p1 } );
     CHECK(r1, vm);
-    assert(js_isobject(r1));
-    js_dispose(p1, free);
-    int weak_counter = js_gc(vm);
+    v8_dispose(vm, p1, free);
+    int weak_counter = v8_gc(vm);
     /* p1 still alive and r1 (ArrayBuffer) is valid. */
     assert(weak_counter == 0);
 
-    js_handle *r2 = js_callstr(vm, "(function(ab) {\n\
+    v8_handle r2 = v8_callstr(vm, "(function(ab) {\n\
         var a = new Int32Array(ab);\n\
         $print(a[0], a[1], a[2], a[3]);\n\
-    });", NULL, (js_args) { r1 });
+    });", 0, (v8_args) { r1 });
     CHECK(r2, vm);
-    js_reset(r2);
-    js_reset(r1);
+    v8_reset(vm, r2);
+    v8_reset(vm, r1);
     /* p1 can be garbage collected. */
-    weak_counter = js_gc(vm);
+    weak_counter = v8_gc(vm);
     assert(weak_counter == 1);
 
-    r1 = js_eval(vm, "$nullptr.packSize('idxs', 1, 1.0, 'apple');");
+    r1 = v8_eval(vm, "$nullptr.packSize('idxs', 1, 1.0, 'apple');");
     CHECK(r1, vm);
-    int pack_size = js_toint32(r1);
+    int pack_size = v8_toint32(vm, r1);
     assert(pack_size == 19);
-    js_reset(r1);
+    v8_reset(vm, r1);
 }
 
 
 int main(int argc, char *argv[]) {
     mill_init(-1, 0);
     mill_worker w = mill_worker_create();
-    js_vm *vm = js_vmopen(w);
+    v8_state vm = js_vmopen(w);
 
     testcall(vm);
     testgo(vm);
@@ -301,9 +304,9 @@ int main(int argc, char *argv[]) {
     testarraybuffer(vm);
 #ifdef GCTEST
     testpack(vm);
+//    testdll(vm);
 #endif
     /* testdispose(vm); */ /* make GCTEST=1 */
-    /* testdll(vm); */    /* make GCTEST=1 */
 
     js_vmclose(vm);
     mill_worker_delete(w);

@@ -21,6 +21,21 @@
             loader._defaultPath = modulePath;
 
             this.DLL = dlloader();
+            this.setTimeout = function (callback, delay) {
+                if (typeof callback !== 'function') {
+                    throw new TypeError("setTimeout: function 'callback' argument expected");
+                }
+                delay |= 0;
+                if (delay < 0)
+                    delay = 0;
+                let dp = $malloc(8);
+                dp.pack(0, 'j', delay);
+                $go(loader.msleep, dp, function(err, data) {
+                        dp.free();
+                        callback();
+                    }
+                );
+            };
 
         } else
             modulePath = this.__path;	// this === parent module

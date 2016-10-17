@@ -9,6 +9,7 @@
 #include "v8.h"
 #include "v8binding.h"
 #include "vm.h"
+#include "store.h"
 #include "ptr.h"
 #include "util.h"
 
@@ -65,9 +66,9 @@ static void Ctype(const FunctionCallbackInfo<Value>& args) {
     assert(args.Holder() == args.This()); // N.B.: not true in accessor callback.!
     int id = GetCtypeId(vm, obj);
     if (id == V8EXTPTR)
-        args.GetReturnValue().Set(v8_str(isolate, "C-pointer"));
+        args.GetReturnValue().Set(V8_STR(isolate, "C-pointer"));
     else if (id == V8EXTFUNC)
-        args.GetReturnValue().Set(v8_str(isolate, "C-function"));
+        args.GetReturnValue().Set(V8_STR(isolate, "C-function"));
 }
 
 static void Free(const FunctionCallbackInfo<Value>& args) {
@@ -594,7 +595,7 @@ v8Object WrapPtr(js_vm *vm, void *ptr) {
     EscapableHandleScope handle_scope(isolate);
     if (!ptr) {
         return handle_scope.Escape(v8Object::Cast(
-                v8Value::New(isolate, vm->nullptr_handle->handle)));
+                vm->store_->Get(vm->nullptr_handle)));
     }
     v8ObjectTemplate templ =
         v8ObjectTemplate::New(isolate, vm->extptr_template);
@@ -617,7 +618,7 @@ void MakeCtypeProto(js_vm *vm) {
     Isolate *isolate = vm->isolate;
     HandleScope handle_scope(isolate);
     v8ObjectTemplate cp_templ = ObjectTemplate::New(isolate);
-    cp_templ->Set(v8_str(isolate, "ctype"),
+    cp_templ->Set(V8_STR(isolate, "ctype"),
                 FunctionTemplate::New(isolate, Ctype));
     vm->ctype_proto.Reset(isolate, cp_templ->NewInstance(
                     isolate->GetCurrentContext()).ToLocalChecked());
@@ -626,19 +627,19 @@ void MakeCtypeProto(js_vm *vm) {
     //  cptr_object.__proto__ = ptr_proto;
     //  ptr_proto.__proto__ = vm->ctype_proto;
     v8ObjectTemplate ptr_templ = ObjectTemplate::New(isolate);
-    ptr_templ->Set(v8_str(isolate, "dispose"),
+    ptr_templ->Set(V8_STR(isolate, "dispose"),
                 FunctionTemplate::New(isolate, Dispose));
-    ptr_templ->Set(v8_str(isolate, "free"),
+    ptr_templ->Set(V8_STR(isolate, "free"),
                 FunctionTemplate::New(isolate, Free));
-    ptr_templ->Set(v8_str(isolate, "notNull"),
+    ptr_templ->Set(V8_STR(isolate, "notNull"),
                 FunctionTemplate::New(isolate, NotNull));
-    ptr_templ->Set(v8_str(isolate, "utf8String"),
+    ptr_templ->Set(V8_STR(isolate, "utf8String"),
                 FunctionTemplate::New(isolate, Utf8String));
-    ptr_templ->Set(v8_str(isolate, "pack"),
+    ptr_templ->Set(V8_STR(isolate, "pack"),
                 FunctionTemplate::New(isolate, Pack));
-    ptr_templ->Set(v8_str(isolate, "unpack"),
+    ptr_templ->Set(V8_STR(isolate, "unpack"),
                 FunctionTemplate::New(isolate, Unpack));
-    ptr_templ->Set(v8_str(isolate, "packSize"),
+    ptr_templ->Set(V8_STR(isolate, "packSize"),
                 FunctionTemplate::New(isolate, PackSize));
 
     // Create the one and only proto instance.

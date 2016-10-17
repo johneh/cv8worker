@@ -24,13 +24,13 @@
 // Transfer rate:          997.7 [Kbytes/sec] received
 //
 
-void js_panic(js_vm *vm) {
-    fprintf(stderr, "%s\n", js_errstr(vm));
+void js_panic(v8_state vm) {
+    fprintf(stderr, "%s\n", v8_errstr(vm));
     exit(1);
 }
 #define CHECK(rc, vm) if(!rc) js_panic(vm)
 
-coroutine void write_response(js_vm *vm, js_hndl hcr, void *p1) {
+coroutine void write_response(v8_state vm, v8_handle hcr, void *p1) {
     /* 'ps' in JS pack() */
     struct foo_s {
         void *p;
@@ -61,6 +61,10 @@ again:
         goto finish;
     }
     assert(rc < 0 && errno == EAGAIN);
+    /* FIXME -- testgo: testgo.c:63: write_response: Assertion `rc < 0 && (*__errno_location ()) == 11' failed.
+Aborted (core dumped)
+    */
+
     yield();
     goto again;
 finish:
@@ -72,15 +76,15 @@ finish:
     free(p1);   // DO NOT use the pointer var in JS !
 #else
     // free in JS (See JS below). Also free csock in JS?
-    js_gosend(vm, hcr, NULL);
+    v8_gosend(vm, hcr, NULL);
 #endif
     }
 
-    js_godone(vm, hcr);
+    v8_godone(vm, hcr);
 }
 
 
-coroutine void read_request(js_vm *vm, js_hndl hcr, void *ptr) {
+coroutine void read_request(v8_state vm, v8_handle hcr, void *ptr) {
     mill_fd csock = ptr;
     assert(csock);
     int msg_length = 0;
@@ -91,7 +95,7 @@ coroutine void read_request(js_vm *vm, js_hndl hcr, void *ptr) {
         if (num_bytes_read > 0)
             msg_length += num_bytes_read;
         else if (num_bytes_read == 0 || errno == ECONNRESET) {
-            js_goerr(vm, hcr, "error reading from socket");
+            v8_goerr(vm, hcr, "error reading from socket");
             mill_close(csock, 1);   // XXX: for now
             break;
         } else {
@@ -100,11 +104,11 @@ coroutine void read_request(js_vm *vm, js_hndl hcr, void *ptr) {
 
         if (msg_length >= 52) {
             buf[msg_length] = '\0';
-            js_gosend(vm, hcr, strdup(buf));
+            v8_gosend(vm, hcr, strdup(buf));
             break;
         }
     }
-    js_godone(vm, hcr);
+    v8_godone(vm, hcr);
 }
 
 static char script[] = "\
@@ -130,7 +134,7 @@ resp.pack(0, 'ps', csock, data);\n\
 });";
 
 
-coroutine void listen_and_accept(js_vm *vm, js_hndl hcr, void *ptr) {
+coroutine void listen_and_accept(v8_state vm, v8_handle hcr, void *ptr) {
     ipaddr address;
     int rc = iplocal(&address, NULL, 5555, 0);
     assert(rc == 0);
@@ -139,38 +143,37 @@ coroutine void listen_and_accept(js_vm *vm, js_hndl hcr, void *ptr) {
     while(1) {
         mill_fd csock = tcpaccept(lsock, -1);
         if (! csock)
-            js_goerr(vm, hcr, strerror(errno));
+            v8_goerr(vm, hcr, strerror(errno));
         else
-            js_gosend(vm, hcr, csock);
+            v8_gosend(vm, hcr, csock);
     }
 }
 
-
 void setup(js_vm *vm) {
-    js_handle *hcr = js_go(vm, listen_and_accept);
+    v8_handle hcr = v8_go(vm, listen_and_accept);
     assert(hcr);
-    js_set(JSGLOBAL(vm), "listen_and_accept", hcr);
-    js_reset(hcr);
+    v8_set(vm, v8_global(vm), "listen_and_accept", hcr);
+    v8_reset(vm, hcr);
 
-    hcr = js_go(vm, read_request);
+    hcr = v8_go(vm, read_request);
     assert(hcr);
-    js_set(JSGLOBAL(vm), "read_request", hcr);
-    js_reset(hcr);
+    v8_set(vm, v8_global(vm), "read_request", hcr);
+    v8_reset(vm, hcr);
 
-    hcr = js_go(vm, write_response);
+    hcr = v8_go(vm, write_response);
     assert(hcr);
-    js_set(JSGLOBAL(vm), "write_response", hcr);
-    js_reset(hcr);
+    v8_set(vm, v8_global(vm), "write_response", hcr);
+    v8_reset(vm, hcr);
 }
 
 
 int main(int argc, char *argv[]) {
     mill_init(-1, 0);
     mill_worker w = mill_worker_create();
-    js_vm *vm = js_vmopen(w);
+    v8_state vm = js_vmopen(w);
 
     setup(vm);
-    int rc = js_run(vm, script);
+    int rc = v8_run(vm, script);
     CHECK(rc, vm);
 
     js_vmclose(vm);
