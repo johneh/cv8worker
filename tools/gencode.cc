@@ -720,8 +720,8 @@ public:
 
         fprintf(stdout, "this['#tags'] = _tags;this['#types'] = _types;});\";\n\n");
 
-        fprintf(stdout, "int JS_LOAD(v8_state vm, v8_val vobj) {\n");
-        fprintf(stdout, "int rc = v8dl->call_str(vm, source_str_, vobj);\n");
+        fprintf(stdout, "int JS_LOAD(v8_state vm, v8_handle hobj) {\n");
+        fprintf(stdout, "int rc = v8->callstr(vm, source_str_, hobj, (v8_args){0});\n");
         fprintf(stdout, "if (!rc) return -1;\n");
         fprintf(stdout, "JS_EXPORT(fntab_);\n}\n");
     }

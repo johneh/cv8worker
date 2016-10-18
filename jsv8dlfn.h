@@ -20,9 +20,6 @@ struct v8_dlfn_s {
     void (*from_double)(v8_state, double, v8_val);
     void (*from_pointer)(v8_state, void *, v8_val);
 
-    /* FIXME -- nuke this and use v8->callstr() instead ? */
-    int (*call_str)(v8_state, const char *, v8_val);
-
     const char *(*errstr)(v8_state);    /* XXX: duplicated in struct below */
 };
 

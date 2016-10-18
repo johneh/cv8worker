@@ -48,7 +48,7 @@ char *GetExceptionString(Isolate* isolate, TryCatch* try_catch) {
     String::Utf8Value filename(message->GetScriptOrigin().ResourceName());
     v8Context context(isolate->GetCurrentContext());
     const char* filename_string = *filename ? *filename : "?";
-    int linenum = message->GetLineNumber(context).FromJust();   // FIXME FromJust() crash
+    int linenum = message->GetLineNumber(context).FromJust();
     char linenum_string[32];
 
     sprintf(linenum_string, "%i:", linenum);
@@ -521,7 +521,7 @@ static void CallForeignFunc(
         for (int i = 0; i < argc; i++)
             argh[i+1] = MakeHandle(vm, args[i]);
         argh[0] = vm->undef_handle;
-        // XXX: use v8_set_errstr() and return NULL in case of error.
+        // XXX: use v8_set_errstr() and return 0 in case of error.
         argh[0] = ((Fnfnwrap) func_wrap->fp)(vm, argc, argh);
         v8Value retv = v8Value();
         if (argh[0]) {
@@ -871,37 +871,6 @@ static void from_handle(js_vm *vm, v8_handle h, v8_val argv) {
         v8_set_errstr(vm, "invalid handle");
 }
 
-static int call_str(js_vm *vm, const char *source, v8_val argv) {
-    Isolate *isolate = vm->isolate;
-    HandleScope handle_scope(isolate);
-    v8Context context = isolate->GetCurrentContext();
-
-    // Must be a function expression.
-    v8_handle hr = CompileRun(vm, source);
-    if (!hr)
-        return false;
-    v8Value v1 = GetValueFromHandle(vm, hr);
-    DeleteHandle(vm, hr);
-    if (v1.IsEmpty() || !v1->IsFunction()) {
-        v8_set_errstr(vm, "call_str: argument is not a function expression");
-        return false;
-    }
-    v8Function func = v8Function::Cast(v1);
-
-    TryCatch try_catch(isolate);
-    v8Object self = context->Global();
-    if (argv) {
-        self = reinterpret_cast<v8Value *>(argv)[0]
-                    -> ToObject(context).ToLocalChecked();
-    }
-    func->Call(context, self, 0, nullptr).FromMaybe(v8Value());
-    if (try_catch.HasCaught()) {
-        SetError(vm, &try_catch);
-        return false;
-    }
-    return true;
-}
-
 static struct v8_dlfn_s v8dlfns = {
     to_int,
     to_uint,
@@ -916,7 +885,6 @@ static struct v8_dlfn_s v8dlfns = {
     from_ulong,
     from_double,
     from_pointer,
-    call_str,
     v8_errstr,
 };
 
@@ -946,7 +914,7 @@ static struct v8_fn_s v8fns = {
     v8_callstr,
 };
 
-typedef int (*Fnload)(js_vm *, v8_val, v8_dlfn_s *const, v8_fn_s *const, v8_ffn **);
+typedef int (*Fnload)(js_vm *, v8_handle, v8_dlfn_s *const, v8_fn_s *const, v8_ffn **);
 
 // $load - load a dynamic library.
 // The filename must contain a slash. Any path search should be
@@ -983,9 +951,11 @@ static void Load(const FunctionCallbackInfo<Value>& args) {
 
     v8_ffn *functab;
     v8Object o1 = Object::New(isolate);
-    v8Value argv[] = { o1 };
+    v8_handle h1 = CreateHandle(vm, o1);
     v8_set_errstr(vm, nullptr);
-    int nfunc = load_func(vm, argv, &v8dlfns, &v8fns, &functab);
+    int nfunc = load_func(vm, h1, &v8dlfns, &v8fns, &functab);
+    DeleteHandle(vm, h1);
+
     if (nfunc < 0) {
         dlclose(dl);
         ThrowError(isolate, vm->errstr ? vm->errstr : "unknown error");
