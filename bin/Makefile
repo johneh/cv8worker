@@ -2,7 +2,7 @@ TOPDIR := ..
 include $(TOPDIR)/config.mk
 
 INCLUDES = -I. -I$(TOPDIR) -I$(MILL_INCLUDES) $(V8_INCLUDES)
-LIBS = $(V8_LIBS) $(MILL_LIBS) -lm -lstdc++
+LIBS = $(V8_LIBS) -lm -lstdc++ $(MILL_LIBS)
 
 BINS := jsi
 

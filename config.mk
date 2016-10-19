@@ -3,14 +3,16 @@
 # to V8_LIBS
 
 V8_DIR = $(HOME)/src/v8
-MILL_DIR = $(HOME)/t/libmill_worker
+#MILL_DIR = $(HOME)/t/libmill_worker
+MILL_DIR = $(HOME)/opt
 
 CC = gcc
 CPP = g++
 CFLAGS = -g -O2 -Wall
 CPPFLAGS = -g -O2 -Wall
 
-MILL_LIBS = $(MILL_DIR)/lib/libmill.a
+MILL_LIBS_STATIC = $(MILL_DIR)/lib/libpill.a
+MILL_LIBS = -L$(MILL_DIR)/lib -lpill
 MILL_INCLUDES = $(MILL_DIR)/include
 
 V8_TARGET = x64.release

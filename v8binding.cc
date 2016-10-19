@@ -907,6 +907,7 @@ static struct v8_fn_s v8fns = {
     v8_dispose,
     v8_global,
     v8_null,
+    v8_go,
     v8_gosend,
     v8_goerr,
     v8_godone,
@@ -976,6 +977,52 @@ static void Load(const FunctionCallbackInfo<Value>& args) {
 }
 
 ///////////////////////////////////////////////////////////////
+static void PersistentSet(const v8::FunctionCallbackInfo<v8::Value>& args) {
+    int argc = args.Length();
+    Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
+    ThrowNotEnoughArgs(isolate, argc < 1);
+    js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
+    unsigned k = MakeHandle(vm, args[0]);
+    args.GetReturnValue().Set(Integer::NewFromUnsigned(isolate, k));
+}
+
+static void PersistentGet(const v8::FunctionCallbackInfo<v8::Value>& args) {
+    int argc = args.Length();
+    Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
+    ThrowNotEnoughArgs(isolate, argc < 1);
+    unsigned k = args[0]->Uint32Value(isolate->GetCurrentContext()).FromJust();
+    js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
+    v8Value v = vm->store_->Get(k);
+    if (v.IsEmpty())
+        ThrowError(isolate, "get: invalid handle argument");
+    args.GetReturnValue().Set(v);
+}
+
+static void PersistentDelete(const v8::FunctionCallbackInfo<v8::Value>& args) {
+    int argc = args.Length();
+    Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
+    ThrowNotEnoughArgs(isolate, argc < 1);
+    unsigned k = args[0]->Uint32Value(isolate->GetCurrentContext()).FromJust();
+    js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
+    DeleteHandle(vm, k);
+}
+
+static v8Value MakePersistent(Isolate *isolate) {
+    EscapableHandleScope handle_scope(isolate);
+    v8ObjectTemplate templ = ObjectTemplate::New(isolate);
+    templ->Set(V8_STR(isolate, "set"),
+                FunctionTemplate::New(isolate, PersistentSet));
+    templ->Set(V8_STR(isolate, "get"),
+                FunctionTemplate::New(isolate, PersistentGet));
+    templ->Set(V8_STR(isolate, "delete"),
+                FunctionTemplate::New(isolate, PersistentDelete));
+    // Create the one and only instance.
+    v8Object p = templ->NewInstance(isolate->GetCurrentContext()).ToLocalChecked();
+    return handle_scope.Escape(p);
+}
 
 // The second part of the vm initialization.
 static void CreateIsolate(js_vm *vm) {
@@ -1044,8 +1091,8 @@ static void CreateIsolate(js_vm *vm) {
     // Create __proto__ for C-type objects.
     MakeCtypeProto(vm);
 
-    v8Object nullptr_obj = extptr_templ->NewInstance(
-                                            context).ToLocalChecked();
+    v8Object nullptr_obj = extptr_templ
+                -> NewInstance(context).ToLocalChecked();
     nullptr_obj->SetAlignedPointerInInternalField(0,
             reinterpret_cast<void*>(static_cast<uintptr_t>(V8EXTPTR<<2)));
     nullptr_obj->SetInternalField(1, External::New(isolate, nullptr));
@@ -1059,6 +1106,8 @@ static void CreateIsolate(js_vm *vm) {
                         context->Global()->GetPrototype());
     realGlobal->Set(V8_STR(isolate, "Global"), realGlobal);
     realGlobal->Set(V8_STR(isolate, "$nullptr"), nullptr_obj);
+    realGlobal->Set(V8_STR(isolate, "$store"), MakePersistent(isolate));
+
     realGlobal->SetAccessor(context, V8_STR(isolate, "$errno"),
                     GlobalGet, GlobalSet).FromJust();
 

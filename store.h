@@ -18,4 +18,3 @@ class PersistentStore {
     unsigned size_;
     v8::Persistent<v8::Object> container_;
 };
-

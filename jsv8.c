@@ -7,7 +7,7 @@
 #include <fcntl.h>
 #include <assert.h>
 
-#include "libmill.h"
+#include "libpill.h"
 
 #include "v8binding.h"
 #include "jsv8.h"

@@ -2,7 +2,7 @@ TOPDIR := ..
 include $(TOPDIR)/config.mk
 
 INCLUDES = -I. -I$(TOPDIR) -I$(MILL_INCLUDES) $(V8_INCLUDES)
-LIBS = $(V8_LIBS) $(MILL_LIBS) -lm -lstdc++
+LIBS = $(V8_LIBS) $(MILL_LIBS_STATIC) -lm -lstdc++
 
 BINS := testjs
 
@@ -33,7 +33,7 @@ testgo: testgo.o $(TOPDIR)/libcv8.a
 SO_CFLAGS = -fPIC -Wall -c -g -I. -I$(TOPDIR)
 SO_LDFLAGS = -shared
 
-math.o: $(TOPDIR)/jsv8.h math.c
+math.o: $(TOPDIR)/jsv8dlfn.h math.c
 	$(CC) $(SO_CFLAGS) math.c
 
 libmath.so: math.o

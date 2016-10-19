@@ -1,7 +1,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-#include "libmill.h"
+#include "libpill.h"
 #include "jsdef.h"
 
 enum {

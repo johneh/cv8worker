@@ -53,6 +53,7 @@ struct v8_fn_s {
     v8_handle (*global)(v8_state vm);
     v8_handle (*null)(v8_state vm);
 
+    v8_handle (*goroutine)(v8_state, Fngo);
     int (*gosend)(v8_state, v8_handle, void *);
     int (*goerr)(v8_state, v8_handle, char *);
     int (*godone)(v8_state, v8_handle);
@@ -66,8 +67,8 @@ struct v8_fn_s {
 #ifndef V8_BINDING   /* define in the main source before including this header */
 static const struct v8_dlfn_s *v8dl;
 static const struct v8_fn_s *v8;
-#define JS_LOAD(vm, libobj) \
-v8_load_(vm, libobj, const struct v8_dlfn_s *const dl_,\
+#define JS_LOAD(vm, hlibobj) \
+v8_load_(vm, hlibobj, const struct v8_dlfn_s *const dl_,\
         const struct v8_fn_s *const v8_, v8_ffn **fp_) {\
     v8dl = dl_; v8 = v8_;
 

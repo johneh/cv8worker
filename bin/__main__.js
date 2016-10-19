@@ -145,15 +145,20 @@
             } catch (e) {
                 lib = null;
             }
-            if (lib === null || ! (lib instanceof Object)
-                    || ! lib.hasOwnProperty('#types')
-                    || ! lib.hasOwnProperty('#tags')
-            )
+            if (lib === null || ! (lib instanceof Object))
                 throw new Error('DLL: error loading library \'' + libname + '\'');
-            this._types = lib['#types'];
-            this._tags = lib['#tags'];
-            delete this._lib['#types'];
-            delete this._lib['#tags'];
+            if (lib.hasOwnProperty('#types')) {
+                this._types = lib['#types'];
+                delete this._lib['#types'];
+            } else {
+                this._types = {};
+            }
+            if (lib.hasOwnProperty('#tags')) {
+                this._tags = lib['#tags'];
+                delete this._lib['#tags'];
+            } else {
+                this._tags = {};
+            }
         };
 
         dll.prototype.sizeof = function(s) {

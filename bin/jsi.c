@@ -9,7 +9,7 @@
 #include <limits.h>
 #include <assert.h>
 
-#include "libmill.h"
+#include "libpill.h"
 #include "jsv8.h"
 
 static char *readfile(const char *filename, size_t *len);
