@@ -487,7 +487,7 @@ static v8Value unpack(void *ptr, char fmtc,
         *pwidth = strlen((char *) ptr) + 1;
         break;
     case 'p':
-        v = WrapPtr((js_vm *) isolate->GetData(0), ptr);
+        v = WrapPtr((js_vm *) isolate->GetData(0), *((void **) ptr));
         *pwidth = sizeof (void *);
         break;
     case 'a': {
