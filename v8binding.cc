@@ -484,6 +484,18 @@ static void Malloc(const v8::FunctionCallbackInfo<v8::Value>& args) {
     args.GetReturnValue().Set(ptrObj);
 }
 
+static void StrError(const v8::FunctionCallbackInfo<v8::Value>& args) {
+    Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
+    v8Context context = isolate->GetCurrentContext();
+    int errnum;
+    if (args.Length() > 0)
+        errnum = args[0]->Int32Value(context).FromJust();
+    else
+        errnum = errno;
+    args.GetReturnValue().Set(V8_STR(isolate, strerror(errnum)));
+}
+
 static void CallForeignFunc(
         const v8::FunctionCallbackInfo<v8::Value>& args) {
 
@@ -499,7 +511,7 @@ static void CallForeignFunc(
     if (argc > MAXARGS || argc != func_wrap->pcount)
         ThrowError(isolate, "C-function called with incorrect # of arguments");
 
-    if ((func_wrap->flags & JSV8_DLFUNC)) {
+    if ((func_wrap->flags & V8_DLFUNC)) {
         assert(vm->dlstr_idx == 0);
         v8Value argv[MAXARGS+1];
         // N.B.: argv[0] is for the return value
@@ -963,10 +975,10 @@ static void Load(const FunctionCallbackInfo<Value>& args) {
     }
     for (int i = 0; i < nfunc && functab[i].name; i++) {
         v8Object fnObj;
-        if (functab[i].flags & JSV8_DLCORO) {
+        if (functab[i].flags & V8_DLCORO) {
             fnObj = NewGo(vm, functab[i].fp);
         } else {
-            functab[i].flags |= JSV8_DLFUNC;
+            functab[i].flags |= V8_DLFUNC;
             fnObj = WrapFunc(vm, &functab[i]);
         }
         o1->Set(context,
@@ -1052,6 +1064,8 @@ static void CreateIsolate(js_vm *vm) {
                 FunctionTemplate::New(isolate, EvalString));
     global->Set(V8_STR(isolate, "$malloc"),
                 FunctionTemplate::New(isolate, Malloc));
+    global->Set(V8_STR(isolate, "$strerror"),
+                FunctionTemplate::New(isolate, StrError));
     global->Set(V8_STR(isolate, "$load"),
                 FunctionTemplate::New(isolate, Load));
     global->Set(V8_STR(isolate, "$lcntl"),
@@ -1490,6 +1504,7 @@ int v8_dispose(v8_state vm, v8_handle h, Fnfree free_func) {
 /*
  *  ptr.dispose() => use free() as the finalizer.
  *  ptr.dispose(finalizer_function).
+ *  Returns the pointer: p1 = $malloc(..).dispose().
  */
 void Dispose(const FunctionCallbackInfo<Value>& args) {
     int argc = args.Length();
@@ -1501,7 +1516,7 @@ void Dispose(const FunctionCallbackInfo<Value>& args) {
         ThrowTypeError(isolate, "dispose: not a pointer");
     void *ptr = v8External::Cast(obj->GetInternalField(1))->Value();
     if (!ptr || IsCtypeWeak(obj)) {
-        args.GetReturnValue().Set(v8::False(isolate));
+        args.GetReturnValue().Set(obj);
         return;
     }
 
@@ -1519,7 +1534,7 @@ void Dispose(const FunctionCallbackInfo<Value>& args) {
                         v8Object::Cast(args[0])->GetInternalField(1)
                     )->Value()
             );
-        if ((func_item->flags & JSV8_DLFUNC) && func_item->pcount == 1) {
+        if ((func_item->flags & V8_DLFUNC) && func_item->pcount == 1) {
             w->ptr = ptr;
             w->free_dlwrap = (Fndlfnwrap) func_item->fp;
             w->handle.Reset(isolate, obj);
@@ -1534,7 +1549,7 @@ void Dispose(const FunctionCallbackInfo<Value>& args) {
     obj->SetAlignedPointerInInternalField(0,
                 reinterpret_cast<void*>(static_cast<uintptr_t>(oid)));
     w->handle.MarkIndependent();
-    args.GetReturnValue().Set(v8::True(isolate));
+    args.GetReturnValue().Set(obj);
 }
 
 

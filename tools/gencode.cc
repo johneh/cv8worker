@@ -422,7 +422,7 @@ protected:
 
         // the struct entry for the table of functions
         char buf[256];
-        size_t n = snprintf(buf, 256, "{ %d, do_%s, \"%s\", JSV8_DLFUNC },\n",
+        size_t n = snprintf(buf, 256, "{ %d, do_%s, \"%s\", V8_DLFUNC },\n",
                             numParams, cname, cname);
         ASSERT(n < 256);
         m_fns.append(buf);

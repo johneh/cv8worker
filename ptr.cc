@@ -122,6 +122,28 @@ static void Utf8String(const FunctionCallbackInfo<Value>& args) {
                 (char *) ptr, v8::String::kNormalString, length));
 }
 
+/* N.B.: V8 owns the Buffer memory. "ptr" must be compatible with
+ * ArrayBuffer::Allocator::Free. The pointer object is neutered. */
+static void ToArrayBuffer(const FunctionCallbackInfo<Value>& args) {
+    int argc = args.Length();
+    Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
+    ThrowNotEnoughArgs(isolate, argc < 1);
+    js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
+    v8Object obj = args.Holder();
+    if (GetCtypeId(vm, obj) != V8EXTPTR)
+        ThrowTypeError(isolate, "toArrayBuffer: not a pointer");
+    void *ptr = v8External::Cast(obj->GetInternalField(1))->Value();
+    if (!ptr)
+        ThrowError(isolate, "toArrayBuffer: pointer is null");
+
+    size_t byte_length = args[0]->Uint32Value(
+                    isolate->GetCurrentContext()).FromJust();
+    obj->SetInternalField(1, External::New(isolate, nullptr));
+    args.GetReturnValue().Set(ArrayBuffer::New(isolate, ptr, byte_length,
+                    v8::ArrayBufferCreationMode::kInternalized));
+}
+
 static int packint(v8Value val,
             int width, int issigned, void *ptr, Isolate *isolate) {
     double d = val->NumberValue(
@@ -641,6 +663,8 @@ void MakeCtypeProto(js_vm *vm) {
                 FunctionTemplate::New(isolate, Unpack));
     ptr_templ->Set(V8_STR(isolate, "packSize"),
                 FunctionTemplate::New(isolate, PackSize));
+    ptr_templ->Set(V8_STR(isolate, "toArrayBuffer"),
+                FunctionTemplate::New(isolate, ToArrayBuffer));
 
     // Create the one and only proto instance.
     v8Object ptr_proto = ptr_templ

@@ -18,8 +18,8 @@ typedef struct v8_ffn_s {
     void *fp;
     const char *name;
     int flags;
-#define JSV8_DLFUNC  (1<<0)
-#define JSV8_DLCORO  (1<<1)
+#define V8_DLFUNC  (1<<0)
+#define V8_DLCORO  (1<<1)
 } v8_ffn;
 
 typedef v8_handle v8_args[4];
