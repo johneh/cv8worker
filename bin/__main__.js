@@ -37,6 +37,11 @@
                 );
             };
 
+            // unique Id (for use as ctypeid etc.) 
+            loader._uId = 0;
+            this.$uId = function () {
+                return ++loader._uId;
+            };
         } else
             modulePath = this.__path;	// this === parent module
 

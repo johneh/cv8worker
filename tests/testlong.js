@@ -64,3 +64,23 @@ i3 = $lcntl(i1, $long.lrshift, 1);
 $print($lcntl(i2), $lcntl(i3));
 
 //$print(123 << 32);
+
+function Long(x, unsigned) {
+    return $long(x, ~~unsigned);
+}
+
+Long.prototype = $long(0).__proto__;
+Long.prototype.add=function(x) {
+    return $lcntl(this, $long.add, x);
+};
+
+$print(i2 instanceof Long);
+$print(Long("0") instanceof Long);
+
+i1 = Long(-1);  //$long("-1");
+i2 = $long("1");
+i3 = i1.add(i2);
+$print($lcntl(i3));
+$print(i3 instanceof Long);
+
+

@@ -17,32 +17,12 @@ using namespace v8;
 
 extern "C" {
 
-int GetCtypeId(js_vm *vm, v8Value v) {
-    if (!v->IsObject())
-        return 0;
-    HandleScope handle_scope(vm->isolate);
-    v8Object obj = v8Object::Cast(v);
-    if (obj->InternalFieldCount() != 2)
-        return 0;
-    v8Value proto = obj->GetPrototype();
-
-    /* Walking the proto chain */
-    while (!proto->IsNull()) {
-        if (proto == vm->ctype_proto) {
-            return static_cast<int>(reinterpret_cast<uintptr_t>(
-                    obj->GetAlignedPointerFromInternalField(0)) >> 2);
-        }
-        proto = proto->ToObject()->GetPrototype();
-    }
-    return 0;
-}
-
 v8Object ToPtr(v8Value v) {
     if (v->IsObject()) {
         v8Object obj = v8Object::Cast(v);
         if (obj->InternalFieldCount() == 2
-            && (V8EXTPTR == static_cast<int>(reinterpret_cast<uintptr_t>(
-                    obj->GetAlignedPointerFromInternalField(0)) >> 2)
+            && (V8EXTPTR == (static_cast<uint16_t>(reinterpret_cast<uintptr_t>(
+                    obj->GetAlignedPointerFromInternalField(0))) >> 2)
             )
         )
             return obj;
@@ -53,30 +33,25 @@ v8Object ToPtr(v8Value v) {
 int IsCtypeWeak(v8Object obj) {
     assert(obj->InternalFieldCount() == 2);
     int id = static_cast<int>(reinterpret_cast<uintptr_t>(
-                obj->GetAlignedPointerFromInternalField(0)) >> 1);
+                obj->GetAlignedPointerFromInternalField(0))) >> 1;
     return (id & 1);
 }
 
-// C pointer and function objects method
-static void Ctype(const FunctionCallbackInfo<Value>& args) {
-    Isolate *isolate = args.GetIsolate();
-    HandleScope handle_scope(isolate);
-    js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
-    v8Object obj = args.This();
-    assert(args.Holder() == args.This()); // N.B.: not true in accessor callback.!
-    int id = GetCtypeId(vm, obj);
-    if (id == V8EXTPTR)
-        args.GetReturnValue().Set(V8_STR(isolate, "C-pointer"));
-    else if (id == V8EXTFUNC)
-        args.GetReturnValue().Set(V8_STR(isolate, "C-function"));
+void SetCtypeWeak(v8Object obj) {
+    int id = static_cast<int>(reinterpret_cast<uintptr_t>(
+                obj->GetAlignedPointerFromInternalField(0)));
+    id |= (1<<1);
+    obj->SetAlignedPointerInInternalField(0,
+                reinterpret_cast<void*>(static_cast<uintptr_t>(id)));
 }
 
+// ignore if finalizer set.
 static void Free(const FunctionCallbackInfo<Value>& args) {
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
     v8Object obj = args.Holder();
     js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
-    if (GetCtypeId(vm, obj) != V8EXTPTR)
+    if (GetObjectId(vm, obj) != V8EXTPTR)
         ThrowTypeError(isolate, "free: not a pointer");
     void *ptr = v8External::Cast(obj->GetInternalField(1))->Value();
     if (ptr && !IsCtypeWeak(obj)) {
@@ -91,7 +66,7 @@ static void NotNull(const FunctionCallbackInfo<Value>& args) {
     HandleScope handle_scope(isolate);
     js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
     v8Object obj = args.Holder();
-    if (GetCtypeId(vm, obj) != V8EXTPTR)
+    if (GetObjectId(vm, obj) != V8EXTPTR)
         ThrowTypeError(isolate, "notNull: not a pointer");
     void *ptr = v8External::Cast(obj->GetInternalField(1))->Value();
     if (!ptr)
@@ -101,13 +76,29 @@ static void NotNull(const FunctionCallbackInfo<Value>& args) {
     args.GetReturnValue().Set(obj);
 }
 
+// ptr.setId(id) -- set Ctype id, returns the pointer.
+static void SetId(const FunctionCallbackInfo<Value>& args) {
+    Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
+    js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
+    v8Object obj = args.Holder();
+    if (GetObjectId(vm, obj) != V8EXTPTR)
+        ThrowTypeError(isolate, "setId: not a pointer");
+    int ct = 0;
+    if (args.Length() > 0) {
+        ct = args[0]->Int32Value(isolate->GetCurrentContext()).FromJust();
+    }
+    SetCid(obj, ct);
+    args.GetReturnValue().Set(obj);
+}
+
 // ptr.utf8String(length = -1)
 static void Utf8String(const FunctionCallbackInfo<Value>& args) {
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
     js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
     v8Object obj = args.Holder();
-    if (GetCtypeId(vm, obj) != V8EXTPTR)
+    if (GetObjectId(vm, obj) != V8EXTPTR)
         ThrowTypeError(isolate, "utf8String: not a pointer");
     void *ptr = v8External::Cast(obj->GetInternalField(1))->Value();
     if (!ptr)
@@ -131,7 +122,7 @@ static void ToArrayBuffer(const FunctionCallbackInfo<Value>& args) {
     ThrowNotEnoughArgs(isolate, argc < 1);
     js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
     v8Object obj = args.Holder();
-    if (GetCtypeId(vm, obj) != V8EXTPTR)
+    if (GetObjectId(vm, obj) != V8EXTPTR)
         ThrowTypeError(isolate, "toArrayBuffer: not a pointer");
     void *ptr = v8External::Cast(obj->GetInternalField(1))->Value();
     if (!ptr)
@@ -415,7 +406,7 @@ static void Pack(const FunctionCallbackInfo<Value>& args) {
     HandleScope handle_scope(isolate);
     ThrowNotEnoughArgs(isolate, argc < 1);
     v8Object obj = args.Holder();
-    if (GetCtypeId((js_vm *) isolate->GetData(0), obj) != V8EXTPTR) {
+    if (GetObjectId((js_vm *) isolate->GetData(0), obj) != V8EXTPTR) {
         ThrowTypeError(isolate, "pack: not a pointer");
     }
     void *ptr = v8External::Cast(obj
@@ -588,7 +579,7 @@ static void Unpack(const FunctionCallbackInfo<Value>& args) {
     HandleScope handle_scope(isolate);
     ThrowNotEnoughArgs(isolate, argc < 1);
     v8Object obj = args.Holder();
-    if (GetCtypeId((js_vm *) isolate->GetData(0), obj) != V8EXTPTR) {
+    if (GetObjectId((js_vm *) isolate->GetData(0), obj) != V8EXTPTR) {
         ThrowTypeError(isolate, "unpack: not a pointer");
     }
     void *ptr = v8External::Cast(obj->GetInternalField(1))->Value();
@@ -623,9 +614,7 @@ v8Object WrapPtr(js_vm *vm, void *ptr) {
         v8ObjectTemplate::New(isolate, vm->extptr_template);
     v8Object obj = templ->NewInstance(
                     isolate->GetCurrentContext()).ToLocalChecked();
-    int oid = (V8EXTPTR<<2);
-    obj->SetAlignedPointerInInternalField(0,
-             reinterpret_cast<void*>(static_cast<uintptr_t>(oid)));
+    SetObjectId(obj, V8EXTPTR);
     obj->SetInternalField(1, External::New(isolate, ptr));
     obj->SetPrototype(v8Value::New(isolate, vm->cptr_proto));
     return handle_scope.Escape(obj);
@@ -639,15 +628,9 @@ void *UnwrapPtr(v8Object ptrObj) {
 void MakeCtypeProto(js_vm *vm) {
     Isolate *isolate = vm->isolate;
     HandleScope handle_scope(isolate);
-    v8ObjectTemplate cp_templ = ObjectTemplate::New(isolate);
-    cp_templ->Set(V8_STR(isolate, "ctype"),
-                FunctionTemplate::New(isolate, Ctype));
-    vm->ctype_proto.Reset(isolate, cp_templ->NewInstance(
-                    isolate->GetCurrentContext()).ToLocalChecked());
 
     // Create the proto object for the C-type pointer.
     //  cptr_object.__proto__ = ptr_proto;
-    //  ptr_proto.__proto__ = vm->ctype_proto;
     v8ObjectTemplate ptr_templ = ObjectTemplate::New(isolate);
     ptr_templ->Set(V8_STR(isolate, "dispose"),
                 FunctionTemplate::New(isolate, Dispose));
@@ -655,6 +638,8 @@ void MakeCtypeProto(js_vm *vm) {
                 FunctionTemplate::New(isolate, Free));
     ptr_templ->Set(V8_STR(isolate, "notNull"),
                 FunctionTemplate::New(isolate, NotNull));
+    ptr_templ->Set(V8_STR(isolate, "setId"),
+                FunctionTemplate::New(isolate, SetId));
     ptr_templ->Set(V8_STR(isolate, "utf8String"),
                 FunctionTemplate::New(isolate, Utf8String));
     ptr_templ->Set(V8_STR(isolate, "pack"),
@@ -669,10 +654,38 @@ void MakeCtypeProto(js_vm *vm) {
     // Create the one and only proto instance.
     v8Object ptr_proto = ptr_templ
                 -> NewInstance(isolate->GetCurrentContext()).ToLocalChecked();
-    // Setup the proto chain.
-    ptr_proto->SetPrototype(v8Value::New(isolate, vm->ctype_proto));
     // Make the proto object persistent.
     vm->cptr_proto.Reset(isolate, ptr_proto);
 }
 
 }
+
+/*
+
+// Contrast with plain $malloc(..)
+function Pointer(size) {
+    // throw "illegal operation";
+    // OR ..
+	size = ~~size;
+	if (size <= 0)
+		return $nullptr;
+	return $malloc(size).dispose();	// XXX: with finalizer free() by default.
+}
+
+Pointer.prototype = $nullptr.__proto__;
+Pointer.prototype.constructor = Pointer;    // or $nullptr.__proto__.constructor = Pointer;
+
+// additional proto methods .. 
+Pointer.prototype.foo = function() {
+	$print('.... foo ...');
+	// this.free(); etc.
+};
+
+var p2 = $malloc(8);
+$print(p2 instanceof Pointer); // -> true
+var p3 = new Pointer(16);
+$print(p3 instanceof Pointer); // -> true
+$print($nullptr instanceof Pointer); // -> true
+
+*/
+

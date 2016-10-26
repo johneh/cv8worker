@@ -29,10 +29,10 @@ v8Object Int64(js_vm *vm, int64_t i64) {
         v8ObjectTemplate::New(isolate, vm->i64_template);
     v8Object obj = templ->NewInstance(
                     isolate->GetCurrentContext()).ToLocalChecked();
-    obj->SetAlignedPointerInInternalField(0,
-            reinterpret_cast<void*>(static_cast<uintptr_t>(V8INT64<<2)));
+    SetObjectId(obj, V8INT64);
     obj->SetInternalField(1, External::New(isolate,
             reinterpret_cast<void*>(static_cast<intptr_t>(i64))));
+    obj->SetPrototype(v8Value::New(isolate, vm->long_proto));
     return handle_scope.Escape(obj);
 }
 
@@ -43,10 +43,10 @@ v8Object UInt64(js_vm *vm, uint64_t ui64) {
         v8ObjectTemplate::New(isolate, vm->ui64_template);
     v8Object obj = templ->NewInstance(
                     isolate->GetCurrentContext()).ToLocalChecked();
-    obj->SetAlignedPointerInInternalField(0,
-             reinterpret_cast<void*>(static_cast<uintptr_t>(V8UINT64<<2)));
+    SetObjectId(obj, V8UINT64);
     obj->SetInternalField(1, External::New(isolate,
             reinterpret_cast<void*>(static_cast<uintptr_t>(ui64))));
+    obj->SetPrototype(v8Value::New(isolate, vm->long_proto));
     return handle_scope.Escape(obj);
 }
 
@@ -61,8 +61,8 @@ int LongValue(v8Value v, long64 *l) {
     v8Object obj;
     if (v->IsObject()
             && (obj = v8Object::Cast(v))->InternalFieldCount() == 2) {
-        int id = static_cast<int>(reinterpret_cast<uintptr_t>(
-                obj->GetAlignedPointerFromInternalField(0)) >> 2);
+        int id = static_cast<uint16_t>(reinterpret_cast<uintptr_t>(
+                obj->GetAlignedPointerFromInternalField(0))) >> 2;
         if (id == V8INT64) {
             l->val.i64 = static_cast<int64_t>(
                 reinterpret_cast<intptr_t>(v8External::Cast(
@@ -401,6 +401,7 @@ static void Long(const v8::FunctionCallbackInfo<v8::Value>& args) {
 Local<FunctionTemplate> LongTemplate(js_vm *vm) {
     Isolate *isolate = vm->isolate;
     EscapableHandleScope handle_scope(isolate);
+
     Local<FunctionTemplate> long_templ = FunctionTemplate::New(isolate, Long);
     for (unsigned i = 0; long_cmds[i].name; i++) {
         // Only primitive values are allowed!
@@ -412,3 +413,25 @@ Local<FunctionTemplate> LongTemplate(js_vm *vm) {
 
 }
 
+/*
+
+function Long(x, unsigned) {
+    return $long(x, ~~unsigned);
+}
+
+Long.prototype = $long(0).__proto__;
+Long.prototype.constructor = Long;
+
+Long.prototype.add = function(x) {
+    return $lcntl(this, $long.add, x);
+};
+
+$print(Long(0) instanceof Long); // -> true
+$print($long("0") instanceof Long); // -> true
+var i1 = Long(-1);
+var i2 = $long("1");
+var i3 = i1.add(i2);
+$print($lcntl(i3)); // -> 0
+$print(i3 instanceof Long); //-> true
+
+*/

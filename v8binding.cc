@@ -128,8 +128,7 @@ static v8Object NewGo(js_vm *vm, void *fptr) {
     v8ObjectTemplate templ = v8ObjectTemplate::New(isolate, vm->go_template);
     v8Object obj = templ->NewInstance(
                         isolate->GetCurrentContext()).ToLocalChecked();
-    obj->SetAlignedPointerInInternalField(0,
-             reinterpret_cast<void*>(static_cast<uintptr_t>(V8GO<<2)));
+    SetObjectId(obj, V8GO);
     obj->SetInternalField(1, External::New(isolate, fptr));
     // The rest of the internal fields are "Undefined".
     return handle_scope.Escape(obj);
@@ -139,8 +138,8 @@ static v8Object ToGo(v8Value v) {
     if (!v.IsEmpty() && v->IsObject()) {
         v8Object cr = v8Object::Cast(v);
         if (cr->InternalFieldCount() == GOROUTINE_INTERNAL_FIELD_COUNT
-            && (V8GO == static_cast<int>(reinterpret_cast<uintptr_t>(
-                    cr->GetAlignedPointerFromInternalField(0)) >> 2))
+            && (V8GO == (static_cast<uint16_t>(reinterpret_cast<uintptr_t>(
+                    cr->GetAlignedPointerFromInternalField(0))) >> 2))
         )
         return cr;
     }
@@ -211,7 +210,7 @@ static void Go(const FunctionCallbackInfo<Value>& args) {
     ThrowNotEnoughArgs(isolate, argc < 3);
     vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
 
-    if ((GetCtypeId(vm, args[1]) != V8EXTPTR) && !args[1]->IsArrayBuffer())
+    if ((GetObjectId(vm, args[1]) != V8EXTPTR) && !args[1]->IsArrayBuffer())
         ThrowTypeError(isolate,
                 "$go argument #2: pointer or ArrayBuffer expected");
     if (!args[2]->IsFunction())
@@ -368,10 +367,9 @@ static v8Object WrapFunc(js_vm *vm, v8_ffn *func_item) {
     v8ObjectTemplate templ =
         v8ObjectTemplate::New(isolate, vm->extfunc_template);
     v8Object fnObj = templ->NewInstance(isolate->GetCurrentContext()).ToLocalChecked();
-    fnObj->SetAlignedPointerInInternalField(0,
-             reinterpret_cast<void*>(static_cast<uintptr_t>(V8EXTFUNC<<2)));
+    SetObjectId(fnObj, V8EXTFUNC);
     fnObj->SetInternalField(1, External::New(isolate, (void *)func_item));
-    fnObj->SetPrototype(v8Value::New(isolate, vm->ctype_proto));
+    fnObj->SetPrototype(v8Value::New(isolate, vm->cfunc_proto));
     return scope.Escape(fnObj);
 }
 
@@ -465,7 +463,7 @@ static void EvalString(const FunctionCallbackInfo<Value>& args) {
     args.GetReturnValue().Set(result);
 }
 
-// malloc(size [, zerofill])
+// malloc(size [, zerofill] )
 // TODO: adjust GC allocation amount.
 static void Malloc(const v8::FunctionCallbackInfo<v8::Value>& args) {
     int argc = args.Length();
@@ -482,6 +480,28 @@ static void Malloc(const v8::FunctionCallbackInfo<v8::Value>& args) {
     v8Object ptrObj = WrapPtr(
             reinterpret_cast<js_vm*>(isolate->GetData(0)), ptr);
     args.GetReturnValue().Set(ptrObj);
+}
+
+//
+//N.B.: Equals() corresponds to == in JS, StrictEquals() to ===
+// and SameValue() to Object.is in ES6.
+//
+
+// $isPointer(v [, typeid])
+void IsPointer(const FunctionCallbackInfo<Value>& args) {
+    int argc = args.Length();
+    Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
+    ThrowNotEnoughArgs(isolate, argc < 1);
+    v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
+    bool r = (GetObjectId(vm, args[0]) == V8EXTPTR);
+    if (r && argc > 1) {
+        int ct = args[1]->Int32Value(
+                    isolate->GetCurrentContext()).FromJust();
+        if (GetCid(v8Object::Cast(args[0])) != ct)
+            r = false;
+    }
+    args.GetReturnValue().Set(Boolean::New(isolate, r));
 }
 
 static void StrError(const v8::FunctionCallbackInfo<v8::Value>& args) {
@@ -815,7 +835,7 @@ static double to_double(js_vm *vm, int arg_num, v8_val argv) {
 static char *to_string(js_vm *vm, int arg_num, v8_val argv) {
     v8Value v = ARGV;
     if (!v->IsString()) {
-        if (GetCtypeId(vm, v) == V8EXTPTR) {
+        if (GetObjectId(vm, v) == V8EXTPTR) {
             return (char *) v8External::Cast(
                     v8Object::Cast(v)->GetInternalField(1))->Value();
         }
@@ -834,7 +854,7 @@ static char *to_string(js_vm *vm, int arg_num, v8_val argv) {
 
 static void *to_pointer(js_vm *vm, int arg_num, v8_val argv) {
     v8Value v = ARGV;
-    if (GetCtypeId(vm, v) != V8EXTPTR) {
+    if (GetObjectId(vm, v) != V8EXTPTR) {
         v8_set_errstr(vm, "C-type argument is not a pointer");
         return nullptr;
     }
@@ -1050,6 +1070,7 @@ static void CreateIsolate(js_vm *vm) {
     isolate->SetData(0, vm);
 
     v8ObjectTemplate global = ObjectTemplate::New(isolate);
+
     global->Set(V8_STR(isolate, "$print"),
                 FunctionTemplate::New(isolate, Print));
     global->Set(V8_STR(isolate, "$go"),
@@ -1064,6 +1085,8 @@ static void CreateIsolate(js_vm *vm) {
                 FunctionTemplate::New(isolate, EvalString));
     global->Set(V8_STR(isolate, "$malloc"),
                 FunctionTemplate::New(isolate, Malloc));
+    global->Set(V8_STR(isolate, "$isPointer"),
+                FunctionTemplate::New(isolate, IsPointer));
     global->Set(V8_STR(isolate, "$strerror"),
                 FunctionTemplate::New(isolate, StrError));
     global->Set(V8_STR(isolate, "$load"),
@@ -1102,13 +1125,22 @@ static void CreateIsolate(js_vm *vm) {
     ui64_templ->SetInternalFieldCount(2);
     vm->ui64_template.Reset(isolate, ui64_templ);
 
-    // Create __proto__ for C-type objects.
+    // Create __proto__ for pointer objects.
     MakeCtypeProto(vm);
+
+    // Create the C function prototype object.
+    v8ObjectTemplate templ1 = ObjectTemplate::New(isolate);
+    vm->cfunc_proto.Reset(isolate, templ1->NewInstance(context).ToLocalChecked());
+
+    // Create the long prototype object.
+    v8ObjectTemplate templ2 = ObjectTemplate::New(isolate);
+    /* templ2->Set(V8_STR(isolate, "..."),
+                FunctionTemplate::New(isolate, ...)); */
+    vm->long_proto.Reset(isolate, templ2->NewInstance(context).ToLocalChecked());
 
     v8Object nullptr_obj = extptr_templ
                 -> NewInstance(context).ToLocalChecked();
-    nullptr_obj->SetAlignedPointerInInternalField(0,
-            reinterpret_cast<void*>(static_cast<uintptr_t>(V8EXTPTR<<2)));
+    SetObjectId(nullptr_obj, V8EXTPTR);
     nullptr_obj->SetInternalField(1, External::New(isolate, nullptr));
     nullptr_obj->SetPrototype(v8Value::New(isolate, vm->cptr_proto));
 
@@ -1484,9 +1516,7 @@ int v8_dispose(v8_state vm, v8_handle h, Fnfree free_func) {
     v8Object ptrObj = ToPtr(GetValueFromHandle(vm, h));
     if (!ptrObj.IsEmpty() && !IsCtypeWeak(ptrObj) && free_func) {
         vm->store_->Dispose(h);
-        int oid = (V8EXTPTR<<2)|(1<<1);
-        ptrObj->SetAlignedPointerInInternalField(0,
-                reinterpret_cast<void*>(static_cast<uintptr_t>(oid)));
+        SetCtypeWeak(ptrObj);
         WeakPtr *w = new WeakPtr;
         w->vm = vm;
         w->ptr = v8External::Cast(ptrObj->GetInternalField(1))->Value();
@@ -1512,7 +1542,7 @@ void Dispose(const FunctionCallbackInfo<Value>& args) {
     HandleScope handle_scope(isolate);
     v8Object obj = args.Holder();
     v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
-    if (GetCtypeId(vm, obj) != V8EXTPTR)
+    if (GetObjectId(vm, obj) != V8EXTPTR)
         ThrowTypeError(isolate, "dispose: not a pointer");
     void *ptr = v8External::Cast(obj->GetInternalField(1))->Value();
     if (!ptr || IsCtypeWeak(obj)) {
@@ -1528,7 +1558,7 @@ void Dispose(const FunctionCallbackInfo<Value>& args) {
         w->free_func = free;
         w->handle.Reset(isolate, obj);
         w->handle.SetWeak(w, WeakPtrCallback1, WeakCallbackType::kParameter);
-    } else if (GetCtypeId(vm, args[0]) == V8EXTFUNC) {
+    } else if (GetObjectId(vm, args[0]) == V8EXTFUNC) {
         v8_ffn *func_item = reinterpret_cast<v8_ffn *>(
                 v8External::Cast(
                         v8Object::Cast(args[0])->GetInternalField(1)
@@ -1545,9 +1575,8 @@ void Dispose(const FunctionCallbackInfo<Value>& args) {
         delete w;
         ThrowError(isolate, "dispose: invalid argument");
     }
-    int oid = (V8EXTPTR<<2)|(1<<1);
-    obj->SetAlignedPointerInInternalField(0,
-                reinterpret_cast<void*>(static_cast<uintptr_t>(oid)));
+
+    SetCtypeWeak(obj);
     w->handle.MarkIndependent();
     args.GetReturnValue().Set(obj);
 }

@@ -33,8 +33,9 @@ struct js_vm_s {
     v8::Persistent<v8::ObjectTemplate> ui64_template;
     v8::Persistent<v8::ObjectTemplate> go_template;
 
-    v8::Persistent<v8::Value> ctype_proto;
+    v8::Persistent<v8::Value> long_proto;
     v8::Persistent<v8::Value> cptr_proto;
+    v8::Persistent<v8::Value> cfunc_proto;
 
     PersistentStore *store_;
 
@@ -77,6 +78,33 @@ static inline v8::Local<v8::String> V8_STR(v8::Isolate* isolate,
   return v8::String::NewFromUtf8(isolate, x, v8::NewStringType::kNormal)
       .ToLocalChecked();
 }
+
+static inline int GetObjectId(js_vm *vm, v8::Local<v8::Value> v) {
+    v8::Local<v8::Object> obj;
+    v8::HandleScope handle_scope(vm->isolate);
+    if (v->IsObject() && (obj = v8::Local<v8::Object>::Cast(v))->InternalFieldCount() == 2)
+        return (static_cast<uint16_t>(reinterpret_cast<uintptr_t>(
+                    obj->GetAlignedPointerFromInternalField(0))))>>2;
+    return 0;
+}
+
+static inline void SetObjectId(v8::Local<v8::Object> obj, unsigned oid) {
+    obj->SetAlignedPointerInInternalField(0,
+            reinterpret_cast<void*>(static_cast<uintptr_t>(oid<<2)));
+}
+
+static inline int GetCid(v8::Local<v8::Object> obj) {
+    return static_cast<int>(reinterpret_cast<uintptr_t>(
+                obj->GetAlignedPointerFromInternalField(0))>>16);
+}
+
+static inline void SetCid(v8::Local<v8::Object> obj, int cid) {
+    int id = static_cast<int>(reinterpret_cast<uintptr_t>(
+                obj->GetAlignedPointerFromInternalField(0))&0xFFFF)|((cid&0xFFFF)<<16);
+    obj->SetAlignedPointerInInternalField(0,
+                reinterpret_cast<void*>(static_cast<uintptr_t>(id)));
+}
+
 
 #define v8Value Local<Value>
 #define v8String Local<String>
