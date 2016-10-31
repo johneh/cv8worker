@@ -20,7 +20,7 @@ extern "C" {
 v8Object ToPtr(v8Value v) {
     if (v->IsObject()) {
         v8Object obj = v8Object::Cast(v);
-        if (obj->InternalFieldCount() == 2
+        if (obj->InternalFieldCount() == PTR_INTERNAL_FIELD_COUNT
             && (V8EXTPTR == (static_cast<uint16_t>(reinterpret_cast<uintptr_t>(
                     obj->GetAlignedPointerFromInternalField(0))) >> 2)
             )
@@ -31,7 +31,7 @@ v8Object ToPtr(v8Value v) {
 }
 
 int IsCtypeWeak(v8Object obj) {
-    assert(obj->InternalFieldCount() == 2);
+    assert(obj->InternalFieldCount() == PTR_INTERNAL_FIELD_COUNT);
     int id = static_cast<int>(reinterpret_cast<uintptr_t>(
                 obj->GetAlignedPointerFromInternalField(0))) >> 1;
     return (id & 1);
@@ -43,6 +43,16 @@ void SetCtypeWeak(v8Object obj) {
     id |= (1<<1);
     obj->SetAlignedPointerInInternalField(0,
                 reinterpret_cast<void*>(static_cast<uintptr_t>(id)));
+}
+
+void SetCtypeSize(v8Object obj, int size) {
+    obj->SetAlignedPointerInInternalField(2,
+            reinterpret_cast<void*>(static_cast<intptr_t>(size << 1)));
+}
+
+int GetCtypeSize(v8Object obj) {
+    return static_cast<int>(reinterpret_cast<intptr_t>(
+                obj->GetAlignedPointerFromInternalField(2))>>1);
 }
 
 // ignore if finalizer set.
@@ -59,6 +69,19 @@ static void Free(const FunctionCallbackInfo<Value>& args) {
         obj->SetInternalField(1, External::New(isolate, nullptr));
     }
 }
+
+// ptr.sizeOf() -- ensure pointer is not NULL.
+static void SizeOf(const FunctionCallbackInfo<Value>& args) {
+    Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
+    js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
+    v8Object obj = args.Holder();
+    if (GetObjectId(vm, obj) != V8EXTPTR)
+        ThrowTypeError(isolate, "sizeOf: not a pointer");
+    int size = GetCtypeSize(obj);
+    args.GetReturnValue().Set(Integer::New(isolate, size));
+}
+
 
 // ptr.notNull() -- ensure pointer is not NULL.
 static void NotNull(const FunctionCallbackInfo<Value>& args) {
@@ -103,7 +126,7 @@ static void Utf8String(const FunctionCallbackInfo<Value>& args) {
     void *ptr = v8External::Cast(obj->GetInternalField(1))->Value();
     if (!ptr)
         ThrowError(isolate, "utf8String: pointer is null");
-    int length = -1;
+    int length = GetCtypeSize(obj);
     if (args.Length() > 0) {
         length = args[0]->Int32Value(isolate->GetCurrentContext()).FromJust();
         if (length < 0)
@@ -116,10 +139,8 @@ static void Utf8String(const FunctionCallbackInfo<Value>& args) {
 /* N.B.: V8 owns the Buffer memory. "ptr" must be compatible with
  * ArrayBuffer::Allocator::Free. The pointer object is neutered. */
 static void ToArrayBuffer(const FunctionCallbackInfo<Value>& args) {
-    int argc = args.Length();
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
-    ThrowNotEnoughArgs(isolate, argc < 1);
     js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
     v8Object obj = args.Holder();
     if (GetObjectId(vm, obj) != V8EXTPTR)
@@ -128,11 +149,26 @@ static void ToArrayBuffer(const FunctionCallbackInfo<Value>& args) {
     if (!ptr)
         ThrowError(isolate, "toArrayBuffer: pointer is null");
 
-    size_t byte_length = args[0]->Uint32Value(
+    int byte_length = GetCtypeSize(obj);
+#if 0
+    if (byte_length < 0) {
+        int argc = args.Length();
+        ThrowNotEnoughArgs(isolate, argc < 1);
+        byte_length = args[0]->Int32Value(
                     isolate->GetCurrentContext()).FromJust();
-    obj->SetInternalField(1, External::New(isolate, nullptr));
-    args.GetReturnValue().Set(ArrayBuffer::New(isolate, ptr, byte_length,
+    }
+#endif
+
+    if (byte_length <= 0) {
+        /* ThrowError(isolate, "toArrayBuffer: invalid size"); */
+        args.GetReturnValue().Set(v8::Null(isolate));
+    } else {
+        // neuter pointer object
+        obj->SetInternalField(1, External::New(isolate, nullptr));
+
+        args.GetReturnValue().Set(ArrayBuffer::New(isolate, ptr, byte_length,
                     v8::ArrayBufferCreationMode::kInternalized));
+    }
 }
 
 static int packint(v8Value val,
@@ -616,6 +652,7 @@ v8Object WrapPtr(js_vm *vm, void *ptr) {
                     isolate->GetCurrentContext()).ToLocalChecked();
     SetObjectId(obj, V8EXTPTR);
     obj->SetInternalField(1, External::New(isolate, ptr));
+    SetCtypeSize(obj, -1);  // opaque
     obj->SetPrototype(v8Value::New(isolate, vm->cptr_proto));
     return handle_scope.Escape(obj);
 }
@@ -636,6 +673,8 @@ void MakeCtypeProto(js_vm *vm) {
                 FunctionTemplate::New(isolate, Dispose));
     ptr_templ->Set(V8_STR(isolate, "free"),
                 FunctionTemplate::New(isolate, Free));
+    ptr_templ->Set(V8_STR(isolate, "sizeOf"),
+                FunctionTemplate::New(isolate, SizeOf));
     ptr_templ->Set(V8_STR(isolate, "notNull"),
                 FunctionTemplate::New(isolate, NotNull));
     ptr_templ->Set(V8_STR(isolate, "setId"),

@@ -82,7 +82,7 @@ static inline v8::Local<v8::String> V8_STR(v8::Isolate* isolate,
 static inline int GetObjectId(js_vm *vm, v8::Local<v8::Value> v) {
     v8::Local<v8::Object> obj;
     v8::HandleScope handle_scope(vm->isolate);
-    if (v->IsObject() && (obj = v8::Local<v8::Object>::Cast(v))->InternalFieldCount() == 2)
+    if (v->IsObject() && (obj = v8::Local<v8::Object>::Cast(v))->InternalFieldCount() >= 2)
         return (static_cast<uint16_t>(reinterpret_cast<uintptr_t>(
                     obj->GetAlignedPointerFromInternalField(0))))>>2;
     return 0;

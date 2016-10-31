@@ -49,7 +49,7 @@ coroutine void do_task1(v8_state vm, v8_handle hcr, void *data) {
     mill_sleep(now() + k);
     char *tmp = malloc(100);
     sprintf(tmp, "%s -> Task done in %d millsecs ...", s1, k);
-    v8_gosend(vm, hcr, tmp);
+    v8_gosend(vm, hcr, tmp, strlen(tmp));
     v8_godone(vm, hcr);
 }
 

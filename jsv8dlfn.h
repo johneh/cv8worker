@@ -54,7 +54,7 @@ struct v8_fn_s {
     v8_handle (*null)(v8_state vm);
 
     v8_handle (*goroutine)(v8_state, Fngo);
-    int (*gosend)(v8_state, v8_handle, void *);
+    int (*gosend)(v8_state, v8_handle, void *, int);
     int (*goerr)(v8_state, v8_handle, char *);
     int (*godone)(v8_state, v8_handle);
 

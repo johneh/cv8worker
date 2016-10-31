@@ -76,7 +76,7 @@ finish:
     free(p1);   // DO NOT use the pointer var in JS !
 #else
     // free in JS (See JS below). Also free csock in JS?
-    v8_gosend(vm, hcr, NULL);
+    v8_gosend(vm, hcr, NULL, 0);
 #endif
     }
 
@@ -104,7 +104,7 @@ coroutine void read_request(v8_state vm, v8_handle hcr, void *ptr) {
 
         if (msg_length >= 52) {
             buf[msg_length] = '\0';
-            v8_gosend(vm, hcr, strdup(buf));
+            v8_gosend(vm, hcr, strdup(buf), msg_length);
             break;
         }
     }
@@ -145,7 +145,7 @@ coroutine void listen_and_accept(v8_state vm, v8_handle hcr, void *ptr) {
         if (! csock)
             v8_goerr(vm, hcr, strerror(errno));
         else
-            v8_gosend(vm, hcr, csock);
+            v8_gosend(vm, hcr, csock, -1);
     }
 }
 

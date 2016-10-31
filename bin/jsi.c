@@ -97,7 +97,7 @@ v8_handle parse_args(v8_state vm, int argc, char **argv, char **path) {
 coroutine void set_timeout(v8_state vm, v8_handle hcr, void *p1) {
     int64_t delay = *((int64_t *) p1);
     mill_sleep(now()+delay);
-    v8_gosend(vm, hcr, NULL);
+    v8_gosend(vm, hcr, NULL, 0);
     v8_godone(vm, hcr);
 }
 

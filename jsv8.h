@@ -33,7 +33,7 @@ extern int js_isundefined(js_handle *h);
 
 extern v8_handle v8_go(v8_state vm, Fngo fptr);
 
-extern int v8_gosend(v8_state vm, v8_handle hcr, void *data);
+extern int v8_gosend(v8_state vm, v8_handle hcr, void *data, int length);
 extern int v8_goerr(v8_state vm, v8_handle hcr, char *message);
 extern int v8_godone(v8_state vm, v8_handle hcr);
 
