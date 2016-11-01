@@ -669,8 +669,8 @@ void MakeCtypeProto(js_vm *vm) {
     // Create the proto object for the C-type pointer.
     //  cptr_object.__proto__ = ptr_proto;
     v8ObjectTemplate ptr_templ = ObjectTemplate::New(isolate);
-    ptr_templ->Set(V8_STR(isolate, "dispose"),
-                FunctionTemplate::New(isolate, Dispose));
+    ptr_templ->Set(V8_STR(isolate, "gc"),
+                FunctionTemplate::New(isolate, Gc));
     ptr_templ->Set(V8_STR(isolate, "free"),
                 FunctionTemplate::New(isolate, Free));
     ptr_templ->Set(V8_STR(isolate, "sizeOf"),
@@ -708,7 +708,7 @@ function Pointer(size) {
 	size = ~~size;
 	if (size <= 0)
 		return $nullptr;
-	return $malloc(size).dispose();	// XXX: with finalizer free() by default.
+	return $malloc(size).gc();	// XXX: with finalizer free() by default.
 }
 
 Pointer.prototype = $nullptr.__proto__;

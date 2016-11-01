@@ -1555,18 +1555,18 @@ int v8_dispose(v8_state vm, v8_handle h, Fnfree free_func) {
 }
 
 /*
- *  ptr.dispose() => use free() as the finalizer.
- *  ptr.dispose(finalizer_function).
- *  Returns the pointer: p1 = $malloc(..).dispose().
+ *  ptr.gc() => use free() as the finalizer.
+ *  ptr.gc(finalizer_function).
+ *  Returns the pointer: p1 = $malloc(..).gc().
  */
-void Dispose(const FunctionCallbackInfo<Value>& args) {
+void Gc(const FunctionCallbackInfo<Value>& args) {
     int argc = args.Length();
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
     v8Object obj = args.Holder();
     v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
     if (GetObjectId(vm, obj) != V8EXTPTR)
-        ThrowTypeError(isolate, "dispose: not a pointer");
+        ThrowTypeError(isolate, "gc: not a pointer");
     void *ptr = v8External::Cast(obj->GetInternalField(1))->Value();
     if (!ptr || IsCtypeWeak(obj)) {
         args.GetReturnValue().Set(obj);
@@ -1596,7 +1596,7 @@ void Dispose(const FunctionCallbackInfo<Value>& args) {
     }
     if (!w->ptr) {
         delete w;
-        ThrowError(isolate, "dispose: invalid argument");
+        ThrowError(isolate, "gc: invalid argument");
     }
 
     SetCtypeWeak(obj);
