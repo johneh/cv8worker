@@ -42,6 +42,7 @@ struct js_vm_s {
     char *dlstr[MAXARGS];
     int dlstr_idx;
 
+    void *gcptr;
 #ifdef V8TEST
     int weak_counter;
 #endif

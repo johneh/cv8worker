@@ -36,7 +36,8 @@ extern v8_handle v8_go(v8_state vm, Fngo fptr);
 extern int v8_gosend(v8_state vm, v8_handle hcr, void *data, int length);
 extern int v8_goerr(v8_state vm, v8_handle hcr, char *message);
 extern int v8_godone(v8_state vm, v8_handle hcr);
-
+extern int v8_goresolve(v8_state vm, v8_handle hcr, void *data, int length);
+extern int v8_goreject(v8_state vm, v8_handle hcr, char *message);
 extern void v8_set_errstr(v8_state vm, const char *str);
 extern const char *v8_errstr(v8_state vm);
 

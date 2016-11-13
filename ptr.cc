@@ -449,8 +449,9 @@ static void Pack(const FunctionCallbackInfo<Value>& args) {
                         -> GetInternalField(1))->Value();
     if (!ptr)
         ThrowError(isolate, "pack: pointer is null");
-    size_t off = args[0]->ToUint32(
-            isolate->GetCurrentContext()).ToLocalChecked()->Value();
+    if (!args[0]->IsUint32())
+        ThrowError(isolate, "pack: offset is not unsigned integer");
+    size_t off = args[0]->Uint32Value(isolate->GetCurrentContext()).FromJust();
     ptr = (char *) ptr + off;
     int32_t sz = 0;
 
@@ -622,8 +623,9 @@ static void Unpack(const FunctionCallbackInfo<Value>& args) {
 
     if (!ptr)
         ThrowError(isolate, "unpack: pointer is null");
-    size_t off = args[0]->ToUint32(
-            isolate->GetCurrentContext()).ToLocalChecked()->Value();
+    if (!args[0]->IsUint32())
+        ThrowError(isolate, "unpack: offset is not unsigned integer");
+    size_t off = args[0]->Uint32Value(isolate->GetCurrentContext()).FromJust();
     ptr = (char *) ptr + off;
     if (argc > 1) {
         String::Utf8Value fmt_str(args[1]);

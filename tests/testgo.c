@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include "libmill.h"
+#include "libpill.h"
 
 #include "jsv8.h"
 
@@ -38,14 +38,6 @@ coroutine void write_response(v8_state vm, v8_handle hcr, void *p1) {
     } __attribute__((packed));
     struct foo_s *foo = p1;
 
-#if 0
-    mill_fd csock = *((void **) p1);
-    assert(csock);
-    char *ptr = (char *)p1 + sizeof (csock);
-    assert(ptr == foo->data);
-    assert(csock == foo->csock);
-    int total = strlen(ptr);
-#endif
     mill_fd csock = foo->p;
     char *ptr = foo->data;
     int total = strlen(ptr);
@@ -60,25 +52,17 @@ again:
             goto again;
         goto finish;
     }
-    assert(rc < 0 && errno == EAGAIN);
-    /* FIXME -- testgo: testgo.c:63: write_response: Assertion `rc < 0 && (*__errno_location ()) == 11' failed.
-Aborted (core dumped)
-    */
-
+    if (rc < 0 && errno != EAGAIN) {
+        goto finish;
+    }
     yield();
     goto again;
 finish:
-    {
-    int fd = mill_getfd(csock);
-    mill_fdclean(csock);
-    close(fd);
-#if 0
-    free(p1);   // DO NOT use the pointer var in JS !
-#else
-    // free in JS (See JS below). Also free csock in JS?
-    v8_gosend(vm, hcr, NULL, 0);
-#endif
-    }
+    mill_fdclose(csock);
+    if (rc < 0)
+        v8_goerr(vm, hcr, strerror(errno));
+    else
+        v8_gosend(vm, hcr, NULL, 0);
 
     v8_godone(vm, hcr);
 }
@@ -96,7 +80,7 @@ coroutine void read_request(v8_state vm, v8_handle hcr, void *ptr) {
             msg_length += num_bytes_read;
         else if (num_bytes_read == 0 || errno == ECONNRESET) {
             v8_goerr(vm, hcr, "error reading from socket");
-            mill_close(csock, 1);   // XXX: for now
+            mill_fdclose(csock);
             break;
         } else {
             assert(errno == EAGAIN || errno == ETIMEDOUT);
@@ -125,6 +109,7 @@ var data = 'HTTP/1.1 200 OK\\r\\nContent-Length: 3\\r\\nConnection: close\\r\\n\
 var resp = $malloc($nullptr.packSize('ps', csock, data));\n\
 resp.pack(0, 'ps', csock, data);\n\
                     $go(write_response, resp, function(err, data) {\n\
+                        if (err !== null) $print(err);\n\
                         // close socket here.\n\
                         resp.free();\n\
                     });\n\

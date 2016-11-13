@@ -58,6 +58,9 @@ struct v8_fn_s {
     int (*goerr)(v8_state, v8_handle, char *);
     int (*godone)(v8_state, v8_handle);
 
+    int (*goresolve)(v8_state, v8_handle, void *, int);
+    int (*goreject)(v8_state, v8_handle, char *);
+
     const char *(*errstr)(v8_state vm);
     v8_handle (*callstr)(v8_state vm, const char *source,
             v8_handle hself, v8_args hargs);

@@ -80,17 +80,17 @@ void testgo(v8_state vm) {
     rc = v8_run(vm,
 "function foo(k) { var s=0; for (var i=0;i <k;i++){s+=i;}return s;}"
 "for(var i=1; i<=5;i++) {\n\
-    var s1=$malloc(10); s1.pack(0, 's', 'go' + i);s1.dispose();\n\
+    var s1=$malloc(10); s1.pack(0, 's', 'go' + i);s1.gc();\n\
     task1(s1, function (err, data) {\n\
-            if (err == null) $print(data.unpack(0, 's')[0]);data.dispose();\n\
+            if (err == null) $print(data.unpack(0, 's')[0]);\n\
     });\n\
 }\n"
 "$msleep(35);\n"
 "foo(1000000);$print(foo(2000000));"
 "for(var i=6; i<=300;i++) {\n\
-    var s1=$malloc(10); s1.pack(0, 's', 'go' + i);s1.dispose();\n\
+    var s1=$malloc(10); s1.pack(0, 's', 'go' + i);s1.gc();\n\
     task1(s1, function (err, data) {\n\
-        if (err == null) $print(data.unpack(0, 's')[0]);data.dispose();\n\
+        if (err == null) $print(data.unpack(0, 's')[0]);\n\
     });\n\
 }\n"
 "$msleep(25);\n"
@@ -101,6 +101,58 @@ void testgo(v8_state vm) {
     int weak_counter = v8_gc(vm);
     printf("weak counter = %d\n", weak_counter);
 #endif
+}
+
+coroutine void do_task2(v8_state vm, v8_handle hcr, void *data) {
+    const char *s1 = data;
+    fprintf(stderr, "<- %s\n", s1);
+    int k = random() % 50;
+    mill_sleep(now() + k);
+    char *tmp = malloc(100);
+    sprintf(tmp, "%s -> Task done in %d millsecs ...", s1, k);
+    v8_goresolve(vm, hcr, tmp, strlen(tmp));
+}
+
+void testgo2(v8_state vm) {
+    printf("test go with promises.....\n");
+    v8_handle cr = v8_go(vm, do_task2);
+    /* Global.task2 = cr; */
+    int rc = v8_set(vm, v8_global(vm), "task2", cr);
+    assert(rc);
+    v8_reset(vm, cr);
+
+    rc = v8_run(vm,
+"var a=[]; for(var i=1; i<=5;i++) {\n\
+    var s1=$malloc(10); s1.pack(0, 's', 'co' + i);s1.gc();\n\
+    var p1 = $go(task2, s1);\n\
+    p1.then(function(data) {\n\
+        $print(data.unpack(0, 's')[0]);\n\
+        throw new Error('Ignored exception');/* use a .catch(..) to see this error */\n\
+    });\n\
+    a.push(p1);\n\
+}\n"
+"$msleep(35);\n"
+    );
+
+    CHECK(rc, vm);
+
+    // chaining
+    rc = v8_run(vm,
+"var s1=$malloc(10); s1.pack(0, 's', 'coro1');s1.gc();\n\
+var async_task1 = task2; var async_task2 = task2;\n\
+$go(async_task1, s1)\n\
+.then(function(data) {\n\
+    $print(data.unpack(0, 's')[0]);\n\
+    var s2 = $malloc(10); s2.pack(0, 's', 'coro2');s2.gc();\n\
+    return $go(async_task2, s2);\n\
+})\n\
+.then(function(data) {\n\
+    $print(data.unpack(0, 's')[0]);\n\
+});\n\
+$print('Await-ing coro1 and coro2 .....');\n\
+");
+
+    CHECK(rc, vm);
 }
 
 static char *readfile(const char *filename, size_t *len);
@@ -209,7 +261,7 @@ void testdispose(js_vm *vm) {
     js_handle *p0 = js_pointer(vm, malloc(1));
     js_handle *h2 = js_callstr(vm, "(function(p0) {\n\
 var p1 = $malloc(4);\n\
-p1.free();p1=$malloc(8);p1.dispose(efree);});",
+p1.free();p1=$malloc(8);p1.gc(efree);});",
         NULL, (js_args) {p0});
     CHECK(h2, vm);
     js_reset(h2);
@@ -226,8 +278,8 @@ var cairo = $load('./libcairojs.so');\
 var surface = cairo.image_surface_create(\
                     cairo.CAIRO_FORMAT_ARGB32, 120, 100).notNull();\
 var cr = cairo.create(surface).notNull();\
-surface.dispose(cairo.surface_destroy);\
-cr.dispose(cairo.destroy);\
+surface.gc(cairo.surface_destroy);\
+cr.gc(cairo.destroy);\
 cairo.set_source_rgb(cr, 1, 0, 0);\
 cairo.rectangle(cr, 10, 10, 100, 80);\
 cairo.fill(cr);\
@@ -307,6 +359,8 @@ int main(int argc, char *argv[]) {
 //    testdll(vm);
 #endif
     /* testdispose(vm); */ /* make GCTEST=1 */
+
+    testgo2(vm);
 
     js_vmclose(vm);
     mill_worker_delete(w);

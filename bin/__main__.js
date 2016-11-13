@@ -30,11 +30,10 @@
                     delay = 0;
                 let dp = $malloc(8);
                 dp.pack(0, 'j', delay);
-                $go(loader.msleep, dp, function(err, data) {
+                $go(loader.msleep, dp).then(function(data) {
                         dp.free();
                         callback();
-                    }
-                );
+                    });
             };
 
             // unique Id (for use as ctypeid etc.) 
