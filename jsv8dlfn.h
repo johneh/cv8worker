@@ -54,11 +54,7 @@ struct v8_fn_s {
     v8_handle (*null)(v8_state vm);
 
     v8_handle (*goroutine)(v8_state, Fngo);
-    int (*gosend)(v8_state, v8_handle, void *, int);
-    int (*goerr)(v8_state, v8_handle, char *);
-    int (*godone)(v8_state, v8_handle);
-
-    int (*goresolve)(v8_state, v8_handle, void *, int);
+    int (*goresolve)(v8_state, v8_handle, void *, int, int);
     int (*goreject)(v8_state, v8_handle, char *);
 
     const char *(*errstr)(v8_state vm);
@@ -78,6 +74,14 @@ v8_load_(vm, hlibobj, const struct v8_dlfn_s *const dl_,\
 #define JS_EXPORT(t_) } do {\
 *fp_ = t_; return sizeof(t_)/sizeof(t_[0]);\
 } while(0)
+
+#ifndef coroutine
+#if defined __GNUC__ || defined __clang__
+#define coroutine __attribute__((noinline))
+#else
+#define coroutine
+#endif
+#endif
 
 #else
 /* The library must export this routine: */

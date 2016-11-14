@@ -42,6 +42,7 @@ void testcall(v8_state vm) {
     v8_reset(vm, list_props);
 }
 
+#if 0
 coroutine void do_task1(v8_state vm, v8_handle hcr, void *data) {
     const char *s1 = data;
     fprintf(stderr, "<- %s\n", s1);
@@ -102,6 +103,7 @@ void testgo(v8_state vm) {
     printf("weak counter = %d\n", weak_counter);
 #endif
 }
+#endif
 
 coroutine void do_task2(v8_state vm, v8_handle hcr, void *data) {
     const char *s1 = data;
@@ -110,7 +112,7 @@ coroutine void do_task2(v8_state vm, v8_handle hcr, void *data) {
     mill_sleep(now() + k);
     char *tmp = malloc(100);
     sprintf(tmp, "%s -> Task done in %d millsecs ...", s1, k);
-    v8_goresolve(vm, hcr, tmp, strlen(tmp));
+    v8_goresolve(vm, hcr, tmp, strlen(tmp), 1);
 }
 
 void testgo2(v8_state vm) {
@@ -351,7 +353,7 @@ int main(int argc, char *argv[]) {
     v8_state vm = js_vmopen(w);
 
     testcall(vm);
-    testgo(vm);
+//    testgo(vm);
     testexports(vm);
     testarraybuffer(vm);
 #ifdef GCTEST

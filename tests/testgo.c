@@ -43,28 +43,26 @@ coroutine void write_response(v8_state vm, v8_handle hcr, void *p1) {
     int total = strlen(ptr);
 
     int rc;
-again:
-    rc = mill_write(csock, ptr, total, -1);
-    if (rc > 0) {
-        ptr += rc;
-        total -= rc;
-        if (total > 0)
-            goto again;
-        goto finish;
+    while (1) {
+        rc = mill_write(csock, ptr, total, -1);
+        if (rc > 0) {
+            ptr += rc;
+            total -= rc;
+            if (total > 0)
+                continue;
+            mill_close(csock, 1);
+            v8_goresolve(vm, hcr, NULL, 0, 1);
+            break;
+        }
+        // assert(rc < 0);
+        if (rc < 0 && errno != EAGAIN) {
+            fprintf(stderr, "fd: %d\n", mill_getfd(csock));
+            mill_close(csock, 1);
+            v8_goreject(vm, hcr, strerror(errno));
+            break;
+        }
+        yield();
     }
-    if (rc < 0 && errno != EAGAIN) {
-        goto finish;
-    }
-    yield();
-    goto again;
-finish:
-    mill_fdclose(csock);
-    if (rc < 0)
-        v8_goerr(vm, hcr, strerror(errno));
-    else
-        v8_gosend(vm, hcr, NULL, 0);
-
-    v8_godone(vm, hcr);
 }
 
 
@@ -79,8 +77,8 @@ coroutine void read_request(v8_state vm, v8_handle hcr, void *ptr) {
         if (num_bytes_read > 0)
             msg_length += num_bytes_read;
         else if (num_bytes_read == 0 || errno == ECONNRESET) {
-            v8_goerr(vm, hcr, "error reading from socket");
-            mill_fdclose(csock);
+            mill_close(csock, 1);
+            v8_goreject(vm, hcr, "error reading from socket");
             break;
         } else {
             assert(errno == EAGAIN || errno == ETIMEDOUT);
@@ -88,34 +86,27 @@ coroutine void read_request(v8_state vm, v8_handle hcr, void *ptr) {
 
         if (msg_length >= 52) {
             buf[msg_length] = '\0';
-            v8_gosend(vm, hcr, strdup(buf), msg_length);
+            v8_goresolve(vm, hcr, strdup(buf), msg_length, 1);
             break;
         }
     }
-    v8_godone(vm, hcr);
 }
 
+// csock freed in C code unlike req and resp
 static char script[] = "\
-$go(listen_and_accept, $nullptr, function (err, csock) {\n\
-        if (err !== null) {\n\
-            $print(err);\n\
-            return;\n\
-        }\n\
-        $go(read_request, csock, function(err, req) {\n\
-                if (err !== null)\n\
-                    $print(err);\n\
-                else {\n\
+$go(listen_and_accept, $nullptr, function (csock, done) {\n\
+        $go(read_request, csock)\n\
+        .then(function(req) {\n\
 var data = 'HTTP/1.1 200 OK\\r\\nContent-Length: 3\\r\\nConnection: close\\r\\n\\r\\nOk\\n';\n\
-var resp = $malloc($nullptr.packSize('ps', csock, data));\n\
+var resp = $malloc($nullptr.packSize('ps', csock, data)).gc();\n\
 resp.pack(0, 'ps', csock, data);\n\
-                    $go(write_response, resp, function(err, data) {\n\
-                        if (err !== null) $print(err);\n\
-                        // close socket here.\n\
-                        resp.free();\n\
-                    });\n\
-                }\n\
-            }\n\
-        );\n\
+            return $go(write_response, resp);\n\
+        })\n\
+        .then(function(data) {\n\
+        })\n\
+        .catch(function(err) {\n\
+            $print(err);\n\
+        });\n\
 });";
 
 
@@ -127,10 +118,8 @@ coroutine void listen_and_accept(v8_state vm, v8_handle hcr, void *ptr) {
     assert(lsock);
     while(1) {
         mill_fd csock = tcpaccept(lsock, -1);
-        if (! csock)
-            v8_goerr(vm, hcr, strerror(errno));
-        else
-            v8_gosend(vm, hcr, csock, -1);
+        if (csock)
+            v8_goresolve(vm, hcr, csock, -1, 0);
     }
 }
 

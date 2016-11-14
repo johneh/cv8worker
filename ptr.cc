@@ -70,7 +70,11 @@ static void Free(const FunctionCallbackInfo<Value>& args) {
     }
 }
 
-// ptr.sizeOf() -- ensure pointer is not NULL.
+// ptr.sizeOf() == -1 if opaque (and not nullptr)
+// == 0 if ptr == $nullptr
+// > 0, otherwise
+// N.B. isNullPtr() test:  (ptr.sizeOf() == 0), or simply (ptr === $nullptr)
+
 static void SizeOf(const FunctionCallbackInfo<Value>& args) {
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
@@ -137,7 +141,9 @@ static void Utf8String(const FunctionCallbackInfo<Value>& args) {
 }
 
 /* N.B.: V8 owns the Buffer memory. "ptr" must be compatible with
- * ArrayBuffer::Allocator::Free. The pointer object is neutered. */
+ * ArrayBuffer::Allocator::Free. The pointer object is neutered.
+ * BUG (FIXME) -- ptr with gc callback ??? 
+ */
 static void ToArrayBuffer(const FunctionCallbackInfo<Value>& args) {
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);

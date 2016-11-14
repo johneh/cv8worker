@@ -17,27 +17,12 @@ extern v8_handle v8_call(v8_state vm,
 extern v8_handle v8_callstr(v8_state vm, const char *source,
         v8_handle hself, v8_args hargs);
 
-#if 0
-extern int js_set_string(js_handle *hobj,
-        const char *name, const char *val);
-
-extern int js_isnumber(js_handle *h);
-extern int js_isfunction(js_handle *h);
-extern int js_isobject(js_handle *h);
-extern int js_isarray(js_handle *h);
-extern int js_ispointer(js_handle *h);
-extern int js_isstring(js_handle *h);
-extern int js_isnull(js_handle *h);
-extern int js_isundefined(js_handle *h);
-#endif
-
 extern v8_handle v8_go(v8_state vm, Fngo fptr);
 
-extern int v8_gosend(v8_state vm, v8_handle hcr, void *data, int length);
-extern int v8_goerr(v8_state vm, v8_handle hcr, char *message);
-extern int v8_godone(v8_state vm, v8_handle hcr);
-extern int v8_goresolve(v8_state vm, v8_handle hcr, void *data, int length);
+/* if length > 0, data memory is owned by V8 and must be compatible with C free() */
+extern int v8_goresolve(v8_state vm, v8_handle hcr, void *data, int length, int done);
 extern int v8_goreject(v8_state vm, v8_handle hcr, char *message);
+
 extern void v8_set_errstr(v8_state vm, const char *str);
 extern const char *v8_errstr(v8_state vm);
 
