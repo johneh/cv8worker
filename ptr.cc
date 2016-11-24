@@ -55,7 +55,6 @@ int GetCtypeSize(v8Object obj) {
                 obj->GetAlignedPointerFromInternalField(2))>>1);
 }
 
-// ignore if finalizer set.
 static void Free(const FunctionCallbackInfo<Value>& args) {
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
@@ -370,7 +369,7 @@ static int32_t pack(void *ptr, int fmt, Isolate *isolate, v8Value val) {
         *((char *) ptr + l) = '\0';
         return l+1;
     }
-    case 'a':   /* arraybuffer, typedarray or dataview */
+    case 'a':   /* arraybuffer, typedarray or dataview, string or ptr */
         if (val->IsArrayBufferView()) {
             v8ArrayBufferView av = v8ArrayBufferView::Cast(val);
             size_t byte_length = av->ByteLength();
@@ -389,6 +388,22 @@ static int32_t pack(void *ptr, int fmt, Isolate *isolate, v8Value val) {
             *((int32_t *) ptr) = (int32_t) byte_length;
             memcpy((char *)ptr + 4, c.Data(), byte_length);
             return 4 + byte_length;
+        }
+        if (val->IsString()) {
+            v8String s = val->ToString(
+                    isolate->GetCurrentContext()).ToLocalChecked();
+            int utf8len = s->Utf8Length();      /* >= 0 */
+            *((int32_t *) ptr) = (int32_t) utf8len;
+            if (utf8len == s->WriteUtf8((char *)ptr+4, utf8len))
+                return 4 + utf8len;
+        } else {
+            int size;
+            v8Object ptrObj = ToPtr(val);
+            if (! ptrObj.IsEmpty() && (size = GetCtypeSize(ptrObj)) >= 0) {
+                *((int32_t *) ptr) = size;
+                memcpy((char *)ptr+4, UnwrapPtr(ptrObj), size);
+                return 4 + size;
+            }
         }
         return InvalidValue;
     case 'p': {

@@ -384,8 +384,9 @@ static GoCallback *gosend_(js_vm *vm, v8_handle hcr, void *data, int dalen) {
     return cb;
 }
 
-int v8_goresolve(js_vm *vm, v8_handle hcr, void *data, int dalen, int done) {
-    GoCallback *cb = gosend_(vm, hcr, data, dalen);
+int v8_goresolve(js_vm *vm, v8_handle hcr,
+        volatile void *data, int dalen, int done) {
+    GoCallback *cb = gosend_(vm, hcr, (void *) data, dalen);
     if (cb) {
         cb->flags |= GoResolve;
         if (done)
@@ -454,19 +455,6 @@ static void Now(const FunctionCallbackInfo<Value>& args) {
     HandleScope handle_scope(isolate);
     int64_t n = now();
     args.GetReturnValue().Set(Number::New(isolate, n));
-}
-
-// $msleep(milliseconds_to_sleep).
-static void MSleep(const FunctionCallbackInfo<Value>& args) {
-    int64_t n = 0;
-    if (true) {
-        Isolate *isolate = args.GetIsolate();
-        HandleScope handle_scope(isolate);
-        if (args.Length() > 0)
-            n = args[0]->IntegerValue(
-                    isolate->GetCurrentContext()).FromJust();
-    }
-    mill_sleep(now()+n);
 }
 
 static void Close(const FunctionCallbackInfo<Value>& args) {
@@ -547,23 +535,6 @@ void IsPointer(const FunctionCallbackInfo<Value>& args) {
             r = false;
     }
     args.GetReturnValue().Set(Boolean::New(isolate, r));
-}
-
-static void Strdup(const v8::FunctionCallbackInfo<v8::Value>& args) {
-    int argc = args.Length();
-    Isolate *isolate = args.GetIsolate();
-    HandleScope handle_scope(isolate);
-    ThrowNotEnoughArgs(isolate, argc < 1);
-    v8Context context = isolate->GetCurrentContext();
-    v8String s = args[0]->ToString(context).ToLocalChecked();
-    int utf8len = s->Utf8Length();
-    char *ptr = (char *) emalloc(utf8len+1);
-    int l = s->WriteUtf8(ptr, utf8len);
-    ptr[l] = '\0';
-    v8Object ptrObj = WrapPtr(
-            reinterpret_cast<js_vm*>(isolate->GetData(0)), ptr);
-    SetCtypeSize(ptrObj, utf8len);  // exclude terminating nul
-    args.GetReturnValue().Set(ptrObj);
 }
 
 static void StrError(const v8::FunctionCallbackInfo<v8::Value>& args) {
@@ -1181,8 +1152,6 @@ static void CreateIsolate(js_vm *vm) {
                 FunctionTemplate::New(isolate, Print));
     global->Set(V8_STR(isolate, "$go"),
                 FunctionTemplate::New(isolate, Go));
-    global->Set(V8_STR(isolate, "$msleep"),
-                FunctionTemplate::New(isolate, MSleep));
     global->Set(V8_STR(isolate, "$now"),
                 FunctionTemplate::New(isolate, Now));
     global->Set(V8_STR(isolate, "$close"),
@@ -1193,8 +1162,6 @@ static void CreateIsolate(js_vm *vm) {
                 FunctionTemplate::New(isolate, Malloc));
     global->Set(V8_STR(isolate, "$isPointer"),
                 FunctionTemplate::New(isolate, IsPointer));
-    global->Set(V8_STR(isolate, "$strdup"),
-                FunctionTemplate::New(isolate, Strdup));
     global->Set(V8_STR(isolate, "$strerror"),
                 FunctionTemplate::New(isolate, StrError));
     global->Set(V8_STR(isolate, "$load"),

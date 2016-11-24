@@ -42,68 +42,6 @@ void testcall(v8_state vm) {
     v8_reset(vm, list_props);
 }
 
-#if 0
-coroutine void do_task1(v8_state vm, v8_handle hcr, void *data) {
-    const char *s1 = data;
-    fprintf(stderr, "<- %s\n", s1);
-    int k = random() % 50;
-    mill_sleep(now() + k);
-    char *tmp = malloc(100);
-    sprintf(tmp, "%s -> Task done in %d millsecs ...", s1, k);
-    v8_gosend(vm, hcr, tmp, strlen(tmp));
-    v8_godone(vm, hcr);
-}
-
-void testgo(v8_state vm) {
-    printf("testgo .....\n");
-    v8_handle cr = v8_go(vm, do_task1);
-    /* cr is a js object, can set properties on it */
-    v8_handle t1 = v8_string(vm, "task1", -1);
-    int r = v8_set(vm, cr, "name", t1);
-    assert(r);
-    v8_reset(vm, t1);
-
-    v8_handle f1 = v8_callstr(vm, "(function(co) {\
-        $print('co name =', co.name); \
-        return function(s, callback) {\
-            $go(co, s, callback);\
-        };\
-    });", 0, (v8_args) { cr } );
-    assert(f1);
-
-    /* Global.task1 = f1; */
-    int rc = v8_set(vm, v8_global(vm), "task1", f1);
-    assert(rc);
-    v8_reset(vm, f1);
-    v8_reset(vm, cr);
-
-    // XXX: 300 go routines to test resizing of the persistent store
-    rc = v8_run(vm,
-"function foo(k) { var s=0; for (var i=0;i <k;i++){s+=i;}return s;}"
-"for(var i=1; i<=5;i++) {\n\
-    var s1=$malloc(10); s1.pack(0, 's', 'go' + i);s1.gc();\n\
-    task1(s1, function (err, data) {\n\
-            if (err == null) $print(data.unpack(0, 's')[0]);\n\
-    });\n\
-}\n"
-"$msleep(35);\n"
-"foo(1000000);$print(foo(2000000));"
-"for(var i=6; i<=300;i++) {\n\
-    var s1=$malloc(10); s1.pack(0, 's', 'go' + i);s1.gc();\n\
-    task1(s1, function (err, data) {\n\
-        if (err == null) $print(data.unpack(0, 's')[0]);\n\
-    });\n\
-}\n"
-"$msleep(25);\n"
-"/*foo(1000000);$print(foo(2000000));*/"
-    );
-    CHECK(rc, vm);
-#if 0
-    int weak_counter = v8_gc(vm);
-    printf("weak counter = %d\n", weak_counter);
-#endif
-}
-#endif
 
 coroutine void do_task2(v8_state vm, v8_handle hcr, void *data) {
     const char *s1 = data;
@@ -133,7 +71,6 @@ void testgo2(v8_state vm) {
     });\n\
     a.push(p1);\n\
 }\n"
-"$msleep(35);\n"
     );
 
     CHECK(rc, vm);
@@ -353,7 +290,6 @@ int main(int argc, char *argv[]) {
     v8_state vm = js_vmopen(w);
 
     testcall(vm);
-//    testgo(vm);
     testexports(vm);
     testarraybuffer(vm);
 #ifdef GCTEST

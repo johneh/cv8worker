@@ -116,7 +116,7 @@ int main(int argc, char **argv) {
         exit(1);
     }
 
-    mill_init(-1, 0);
+    mill_init(-1, -1);
     mill_worker w = mill_worker_create();
     assert(w);
     v8_state vm = js_vmopen(w);

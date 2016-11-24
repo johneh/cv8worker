@@ -20,7 +20,8 @@ extern v8_handle v8_callstr(v8_state vm, const char *source,
 extern v8_handle v8_go(v8_state vm, Fngo fptr);
 
 /* if length > 0, data memory is owned by V8 and must be compatible with C free() */
-extern int v8_goresolve(v8_state vm, v8_handle hcr, void *data, int length, int done);
+extern int v8_goresolve(v8_state vm, v8_handle hcr,
+        volatile void *data, int length, int done);
 extern int v8_goreject(v8_state vm, v8_handle hcr, char *message);
 
 extern void v8_set_errstr(v8_state vm, const char *str);
