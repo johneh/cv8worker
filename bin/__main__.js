@@ -41,6 +41,7 @@
             this.$uId = function () {
                 return ++loader._uId;
             };
+            this.console = { log : $print };
         } else
             modulePath = this.__path;	// this === parent module
 
@@ -86,7 +87,9 @@
         if (moduleSource === null) {
             throw new Error(path + ': error reading file'); // FIXME strerror(errno)
         }
-        moduleSource = "(function (exports, require, module, __filename, __dirname){"
+
+        // make await available at the base(main) level
+        moduleSource = "(async function (exports, require, module, __filename, __dirname){"
                         + moduleSource + "\n})";
 
         cache[filename] = module;
