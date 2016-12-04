@@ -78,7 +78,7 @@ fprintf(stderr, format , ## args);
 #define DPRINT(format, args...) /* nothing */
 #endif
 
-static int set_weak(v8_state vm, v8Object ptrObj, Fnfree free_func);
+static int SetFinalizer(v8_state vm, v8Object ptrObj, Fnfree free_func);
 
 static v8_handle MakeHandle(js_vm *vm, v8Value value);
 static void DeleteHandle(js_vm *vm, v8_handle h);
@@ -98,11 +98,11 @@ static void SetError(js_vm *vm, TryCatch *try_catch) {
     v8_set_errstr(vm, GetExceptionString(vm->isolate, try_catch));
 }
 
-static void Panic(Isolate *isolate, TryCatch *try_catch) {
-    char *errstr = GetExceptionString(isolate, try_catch);
+static void Panic(const char *errstr) {
     fprintf(stderr, "%s\n", errstr);
     exit(1);
 }
+
 
 ////////////////////////////////// Coroutine //////////////////////////////////
 #define GOROUTINE_INTERNAL_FIELD_COUNT 5
@@ -110,6 +110,7 @@ enum {
     GoDone = (1 << 0),
     GoResolve = (1 << 1),
     GoReject = (1 << 2),
+    GoPull = (1 << 7),  /* "pull" stream */
 };
 
 struct GoCallback {
@@ -286,15 +287,14 @@ static inline void RejectGo(Isolate *isolate, v8Object cr, v8Value val) {
 static bool RunGoCallback(js_vm *vm, GoCallback *cb) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate)
-    // GetCurrentContext() is empty if called from WaitFor().
+    // GetCurrentContext() is NULL if called from WaitFor().
     v8Context context = v8Context::New(isolate, vm->context);
     Context::Scope context_scope(context);
 
     v8Object cr = ToGo(vm->store_->Get(cb->h));
     if (cr.IsEmpty()) {
-        // Delayed validation of the v8_handle in gosend_(..) call.
-        fprintf(stderr, "go callback: invalid coroutine handle\n");
-        exit(1);
+        // Delayed validation of the v8_handle in goresolve/goreject call.
+        Panic("goresolve/goreject: invalid coroutine handle");
     }
 
     if (cb->flags & GoReject) {
@@ -310,18 +310,27 @@ static bool RunGoCallback(js_vm *vm, GoCallback *cb) {
         v8Object ptrObj = WrapPtr(vm, cb->data);
         SetCtypeSize(ptrObj, cb->datalen);
         if (cb->datalen > 0)
-            set_weak(vm, ptrObj, free);
-        ResolveGo(isolate, cr, ptrObj);
+            SetFinalizer(vm, ptrObj, free);
+        if (cb->flags & GoPull) {
+            /* "Pull" stream */
+            v8Object robj = Object::New(isolate);
+            robj->Set(context, V8_STR(isolate, "done"),
+                    Boolean::New(isolate, cb->flags & GoDone));
+            robj->Set(context, V8_STR(isolate, "value"), ptrObj);
+            ResolveGo(isolate, cr, robj);
+        } else
+            ResolveGo(isolate, cr, ptrObj);
         return FinishGo(vm, cr, cb);
     }
 
+    /* "Push" stream */
     TryCatch try_catch(isolate);
 
     bool done = (cb->flags & GoDone) != 0;
     v8Object ptrObj = WrapPtr(vm, cb->data);
     SetCtypeSize(ptrObj, cb->datalen);
     if (cb->datalen > 0)
-        set_weak(vm, ptrObj, free);
+        SetFinalizer(vm, ptrObj, free);
     v8Value args[2];
     args[0] = ptrObj;
     args[1] = Boolean::New(isolate, done);
@@ -347,7 +356,7 @@ static bool RunGoCallback(js_vm *vm, GoCallback *cb) {
 
 static void WaitFor(js_vm *vm) {
     while (vm->ncoro > 0) {
-        DPRINT("[[ WaitFor: %d unfinished coroutines. ]]\n", vm->ncoro);
+        /*DPRINT("[[ WaitFor: %d unfinished coroutines. ]]\n", vm->ncoro);*/
         GoCallback *cb = chr(vm->ch, GoCallback *);
         assert(cb);
         RunGoCallback(vm, cb);
@@ -362,7 +371,6 @@ static void MakeGoTemplate(js_vm *vm) {
     vm->go_template.Reset(isolate, templ);
 }
 
-// XXX: not needed for DLL
 v8_handle v8_go(js_vm *vm, Fngo fptr) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate)
@@ -372,36 +380,28 @@ v8_handle v8_go(js_vm *vm, Fngo fptr) {
     return MakeHandle(vm, gObj);
 }
 
-static GoCallback *gosend_(js_vm *vm, v8_handle hcr, void *data, int dalen) {
+int v8_goresolve(js_vm *vm, v8_handle hcr,
+        volatile void *data, int dalen, int done) {
     GoCallback *cb = new GoCallback;
     cb->h = hcr;    // Delay validating handle to avoid lock contention.
-    cb->data = data;
+    cb->data = const_cast<void *>(data);
     cb->datalen = dalen;
-    cb->flags = 0;
+    cb->flags = (GoResolve|done);
     // Coroutine is running in non-V8 thread.
     int rc = mill_pipesend(vm->outq, &cb);
     assert(rc == 0);
-    return cb;
-}
-
-int v8_goresolve(js_vm *vm, v8_handle hcr,
-        volatile void *data, int dalen, int done) {
-    GoCallback *cb = gosend_(vm, hcr, (void *) data, dalen);
-    if (cb) {
-        cb->flags |= GoResolve;
-        if (done)
-            cb->flags |= GoDone;
-    }
-    return (cb != nullptr);
+    return (rc == 0);
 }
 
 int v8_goreject(js_vm *vm, v8_handle hcr, char *message) {
-    GoCallback *cb = gosend_(vm, hcr, reinterpret_cast<void *>(
-            estrdup(message, strlen(message))), 0);
-    if (cb) {
-        cb->flags = GoReject;
-    }
-    return (cb != nullptr);
+    GoCallback *cb = new GoCallback;
+    cb->h = hcr;    // Delay validating handle to avoid lock contention.
+    cb->data = reinterpret_cast<void *>(estrdup(message, strlen(message)));
+    cb->datalen = 0;
+    cb->flags = GoReject;
+    int rc = mill_pipesend(vm->outq, &cb);
+    assert(rc == 0);
+    return (rc == 0);
 }
 
 ///////////////////////////////////End Coroutine////////////////////////////////
@@ -471,25 +471,24 @@ static void EvalString(const FunctionCallbackInfo<Value>& args) {
 
     int argc = args.Length();
     if (argc < 2 || !args[0]->IsString()) {
-        fprintf(stderr, "$eval: invalid argument(s)\n");
-        exit(1);
+        Panic("$eval: invalid argument(s)");
     }
     v8Context context = isolate->GetCurrentContext();
     TryCatch try_catch(isolate);
     v8String source = v8String::Cast(args[0]);
     v8String name;
     if (!args[1]->ToString(context).ToLocal(&name)) {
-        Panic(isolate, &try_catch);
+        Panic(GetExceptionString(isolate, &try_catch));
     }
 
     ScriptOrigin origin(name);
     v8Script script;
     if (!Script::Compile(context, source, &origin).ToLocal(&script)) {
-        Panic(isolate, &try_catch);
+        Panic(GetExceptionString(isolate, &try_catch));
     }
     v8Value result;
     if (!script->Run(context).ToLocal(&result)) {
-        Panic(isolate, &try_catch);
+        Panic(GetExceptionString(isolate, &try_catch));
     }
     assert(!result.IsEmpty());
     args.GetReturnValue().Set(result);
@@ -547,6 +546,32 @@ static void StrError(const v8::FunctionCallbackInfo<v8::Value>& args) {
     else
         errnum = errno;
     args.GetReturnValue().Set(V8_STR(isolate, strerror(errnum)));
+}
+
+static void ByteLength(const v8::FunctionCallbackInfo<v8::Value>& args) {
+    Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
+    ThrowNotEnoughArgs(isolate, args.Length() < 1);
+    int len = 0;    // maybe < 0 (for Opaque pointer or overflow otherwise).
+
+    v8Object ptrObj = ToPtr(args[0]);
+    if (! ptrObj.IsEmpty()) {
+        len = GetCtypeSize(ptrObj);
+    } else if (args[0]->IsString()) {
+        len = v8String::Cast(args[0])->Utf8Length();
+    } else if (args[0]->IsArrayBufferView()) {
+        /* ArrayBufferView is implemented by all typed arrays and DataView */
+        len = v8ArrayBufferView::Cast(args[0])->ByteLength();
+    } else if (args[0]->IsArrayBuffer()) {
+        len = v8ArrayBuffer::Cast(args[0])->ByteLength();
+    } else {
+        /* ThrowTypeError(isolate, "$length(): invalid argument"); */
+
+        /* XXX: $length(x) !== null && $length(x) >= 0 */
+        args.GetReturnValue().Set(v8::Null(isolate));
+        return;
+    }
+    args.GetReturnValue().Set(Integer::New(isolate, len));
 }
 
 static void CallForeignFunc(
@@ -876,6 +901,7 @@ static double to_double(js_vm *vm, int arg_num, v8_val argv) {
     return v->NumberValue(CURR_CONTEXT(vm)).FromJust();
 }
 
+// string, pointer or arraybuffer(view) argument
 static char *to_string(js_vm *vm, int arg_num, v8_val argv) {
     v8Value v = ARGV;
     if (!v->IsString()) {
@@ -883,6 +909,15 @@ static char *to_string(js_vm *vm, int arg_num, v8_val argv) {
             return (char *) v8External::Cast(
                     v8Object::Cast(v)->GetInternalField(1))->Value();
         }
+        if (v->IsArrayBuffer()) {
+            return (char *) v8ArrayBuffer::Cast(v)->GetContents().Data();
+        }
+        if (v->IsArrayBufferView()) {
+            v8ArrayBufferView av = v8ArrayBufferView::Cast(v);
+            return (char *)av->Buffer()->GetContents().Data() +
+                        av->ByteOffset();
+        }
+
         v8_set_errstr(vm, "C-type argument is not a string");
         return nullptr;
     }
@@ -1164,6 +1199,8 @@ static void CreateIsolate(js_vm *vm) {
                 FunctionTemplate::New(isolate, IsPointer));
     global->Set(V8_STR(isolate, "$strerror"),
                 FunctionTemplate::New(isolate, StrError));
+    global->Set(V8_STR(isolate, "$length"),
+                FunctionTemplate::New(isolate, ByteLength));
     global->Set(V8_STR(isolate, "$load"),
                 FunctionTemplate::New(isolate, Load));
     global->Set(V8_STR(isolate, "$collectGarbage"),
@@ -1445,6 +1482,11 @@ void *v8_topointer(v8_state vm, v8_handle h) {
         // garbage collected!.
         return v8ArrayBuffer::Cast(v)->GetContents().Data();
     }
+    if (v->IsArrayBufferView()) {
+        v8ArrayBufferView av = v8ArrayBufferView::Cast(v);
+        return (char *)av->Buffer()->GetContents().Data() +
+                        av->ByteOffset();
+    }
 
     v8Object obj = ToPtr(v);
     if (obj.IsEmpty()) {
@@ -1590,7 +1632,7 @@ static void WeakPtrCallback2(
     delete w;
 }
 
-static int set_weak(v8_state vm, v8Object ptrObj, Fnfree free_func) {
+static int SetFinalizer(v8_state vm, v8Object ptrObj, Fnfree free_func) {
     Isolate *isolate = vm->isolate;
     if (!ptrObj.IsEmpty() && !IsCtypeWeak(ptrObj) && free_func) {
         void *ptr = v8External::Cast(ptrObj->GetInternalField(1))->Value();
@@ -1615,7 +1657,7 @@ int v8_dispose(v8_state vm, v8_handle h, Fnfree free_func) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate)
     v8Object ptrObj = ToPtr(GetValueFromHandle(vm, h));
-    if (set_weak(vm, ptrObj, free_func)) {
+    if (SetFinalizer(vm, ptrObj, free_func)) {
         vm->store_->Dispose(h);
         return true;
     }
@@ -1642,7 +1684,7 @@ void Gc(const FunctionCallbackInfo<Value>& args) {
         return;
     }
     if (argc == 0) {
-        set_weak(vm, obj, free);
+        SetFinalizer(vm, obj, free);
         args.GetReturnValue().Set(obj);
         return;
     }

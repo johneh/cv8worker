@@ -21,9 +21,13 @@
             loader._defaultPath = modulePath;
 
             this.DLL = dlloader();
+            this.$loadlib = function (libname) {
+                return new DLL(libname, loader._cwd).identifiers;
+            };
+
             this.setTimeout = function (callback, delay) {
                 if (typeof callback !== 'function') {
-                    throw new TypeError("setTimeout: function 'callback' argument expected");
+                    throw new TypeError("setTimeout: 'callback' is not a function");
                 }
                 delay |= 0;
                 if (delay < 0)
@@ -88,8 +92,7 @@
             throw new Error(path + ': error reading file'); // FIXME strerror(errno)
         }
 
-        // make await available at the base(main) level
-        moduleSource = "(async function (exports, require, module, __filename, __dirname){"
+        moduleSource = "(function (exports, require, module, __filename, __dirname){"
                         + moduleSource + "\n})";
 
         cache[filename] = module;
@@ -144,8 +147,10 @@
     };
 
     var dlloader = function () {
-        let dll = function (libname) {
+        let dll = function (libname, dirname) {
             libname = libname + '';
+            if (/^\.\.?\//.test(libname) && dirname)
+                libname = dirname + '/' + libname;
             let lib;
             try {
                 lib = this._lib = $load(libname); // null if path has no slash ???
