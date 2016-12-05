@@ -1,4 +1,4 @@
-var cairo = $load('./libcairojs.so');
+var cairo = $loadlib('./libcairojs.so');
 var surface = cairo.image_surface_create(
                     cairo.CAIRO_FORMAT_ARGB32, 120, 100).notNull();
 var cr = cairo.create(surface).notNull();

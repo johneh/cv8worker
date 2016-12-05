@@ -53,10 +53,6 @@ struct http_s {
     v8_state vm;
     v8_handle hcr;
 
-    /* write buffer */
-    char *wbuf;
-    int wsize;
-
     int state;
 
     /* read buffer */
@@ -706,8 +702,6 @@ http_free(void *ptr) {
             efree(s->body);
         if (s->buf)
             efree(s->buf);
-        if (s->wbuf)
-            efree(s->wbuf);
         if (s->host)
             free(s->host);  /* from strdup() */
         efree(ptr);
@@ -769,17 +763,20 @@ do_http_connect(v8_state vm, v8_handle hcr, void *ptr) {
 
 static coroutine void
 do_http_send(v8_state vm, v8_handle hcr, void *ptr) {
-    struct http_s *s = ptr;
+    struct send_s {
+        struct http_s *s;
+        int wlen;
+        char wbuf[1];
+    } __attribute__((packed));
+    struct send_s *ws = ptr;
+    struct http_s *s = ws->s;
     int len = 0;
-    assert(s->wbuf);
     while (1) {
         int rc = s->writefunc(s->mfd,
-                        s->wbuf + len, s->wsize - len, s->deadline);
+                        ws->wbuf + len, ws->wlen - len, s->deadline);
         if (rc >= 0) {  /* sending 0 bytes shouldn't be an error */
             len += rc;
-            if (len == s->wsize) {
-                efree(s->wbuf);
-                s->wbuf = NULL;
+            if (len == ws->wlen) {
                 v8->goresolve(vm, hcr, NULL, 0, 1);
                 break;
             }
@@ -938,7 +935,11 @@ do_http_create(v8_state vm, int argc, v8_val argv) {
     v8dl->from_pointer(vm, s, argv);
 }
 
-/* close fd */
+/* Close the file descriptor.
+ * WARNING: Safe only if fd is not in the pollset.
+ *      Should not to be used to cancel a connection.
+ *  TODO: execute in a main thread goroutine (fire_and_forget). 
+ */
 static void
 do_http_close(v8_state vm, int argc, v8_val argv) {
     struct http_s *s = v8dl->to_pointer(vm, 1, argv);
@@ -949,20 +950,6 @@ static void
 do_http_free(v8_state vm, int argc, v8_val argv) {
     void *ptr = v8dl->to_pointer(vm, 1, argv);
     http_free(ptr);
-}
-
-
-static void
-do_http_setwbuf(v8_state vm, int argc, v8_val argv) {
-    struct http_s *s = v8dl->to_pointer(vm, 1, argv);
-    /* XXX: to_string() argument can be a pointer or an arraybuffer(view)! */
-    char *buf = v8dl->to_string(vm, 2, argv);
-    s->wsize = v8dl->to_int(vm, 3, argv);
-    assert(!s->wbuf);
-    s->wbuf = emalloc(s->wsize+1);  /* wbuf should be never NULL
-                                     * (even with empty string or null pointer). */ 
-    assert(s->wbuf);    // FIXME return error (false/true?)
-    memcpy(s->wbuf, buf, s->wsize);
 }
 
 static coroutine void
@@ -1015,7 +1002,6 @@ do_http_listen_and_accept(v8_state vm, v8_handle hcr, void *ptr) {
 static v8_ffn ff_table[] = {
     {4, do_http_create, "create", 0 },
     {1, do_http_free, "free", 0 },
-    {3, do_http_setwbuf, "setwbuf", 0 },
     {1, do_http_close, "closefd", 0},
     {0, do_http_connect, "connect", V8_DLCORO },
     {0, do_http_send, "send", V8_DLCORO },

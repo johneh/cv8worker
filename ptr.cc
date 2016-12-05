@@ -241,22 +241,38 @@ static int32_t packsize(int fmt, Isolate *isolate, v8Value val) {
                     isolate->GetCurrentContext()).ToLocalChecked();
         return s->Utf8Length() + 1;
     }
-    case 'a':   /* arraybuffer, typedarray or dataview */
+    case 'a': {
+        size_t byte_length;
+        /* arraybuffer, typedarray or dataview .. */
         if (val->IsArrayBufferView()) {
             v8ArrayBufferView av = v8ArrayBufferView::Cast(val);
-            size_t byte_length = av->ByteLength();
-            if (byte_length + 4 > INT32_MAX)
-                return InvalidValue;
-            return 4 + byte_length;
+            byte_length = av->ByteLength();
+            goto x;
         }
         if (val->IsArrayBuffer()) {
             ArrayBuffer::Contents c = v8ArrayBuffer::Cast(val)->GetContents();
-            size_t byte_length = c.ByteLength();
-            if (byte_length + 4 > INT32_MAX)
-                return InvalidValue;
-            return 4 + byte_length;
+            byte_length = c.ByteLength();
+            goto x;
         }
-        return InvalidValue;
+        if (val->IsString()) {
+            v8String s = val->ToString(
+                    isolate->GetCurrentContext()).ToLocalChecked();
+            byte_length = s->Utf8Length();
+            goto x;
+        } else {
+            int size;
+            v8Object ptrObj = ToPtr(val);
+            if (! ptrObj.IsEmpty() && (size = GetCtypeSize(ptrObj)) >= 0) {
+                byte_length = size;
+                goto x;
+            }
+            return InvalidValue;
+        }
+x:
+        if (byte_length > INT32_MAX - 4)
+            return InvalidValue;
+        return 4 + byte_length;
+    }
     case 'p':
         return sizeof (void *);
     default:
@@ -373,7 +389,7 @@ static int32_t pack(void *ptr, int fmt, Isolate *isolate, v8Value val) {
         if (val->IsArrayBufferView()) {
             v8ArrayBufferView av = v8ArrayBufferView::Cast(val);
             size_t byte_length = av->ByteLength();
-            if (byte_length + 4 > INT32_MAX)
+            if (byte_length > INT32_MAX - 4)
                 return InvalidValue;
             *((int32_t *) ptr) = (int32_t) byte_length;
             size_t l = av->CopyContents((char *) ptr + 4, byte_length);
@@ -383,7 +399,7 @@ static int32_t pack(void *ptr, int fmt, Isolate *isolate, v8Value val) {
         if (val->IsArrayBuffer()) {
             ArrayBuffer::Contents c = v8ArrayBuffer::Cast(val)->GetContents();
             size_t byte_length = c.ByteLength();
-            if (byte_length + 4 > INT32_MAX)
+            if (byte_length > INT32_MAX - 4)
                 return InvalidValue;
             *((int32_t *) ptr) = (int32_t) byte_length;
             memcpy((char *)ptr + 4, c.Data(), byte_length);
@@ -394,12 +410,15 @@ static int32_t pack(void *ptr, int fmt, Isolate *isolate, v8Value val) {
                     isolate->GetCurrentContext()).ToLocalChecked();
             int utf8len = s->Utf8Length();      /* >= 0 */
             *((int32_t *) ptr) = (int32_t) utf8len;
-            if (utf8len == s->WriteUtf8((char *)ptr+4, utf8len))
+            if (utf8len <= INT32_MAX - 4
+                    && utf8len == s->WriteUtf8((char *)ptr+4, utf8len))
                 return 4 + utf8len;
         } else {
             int size;
             v8Object ptrObj = ToPtr(val);
-            if (! ptrObj.IsEmpty() && (size = GetCtypeSize(ptrObj)) >= 0) {
+            if (! ptrObj.IsEmpty() && (size = GetCtypeSize(ptrObj)) >= 0
+                    && size <= INT32_MAX - 4
+            ) {
                 *((int32_t *) ptr) = size;
                 memcpy((char *)ptr+4, UnwrapPtr(ptrObj), size);
                 return 4 + size;
