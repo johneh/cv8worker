@@ -1,4 +1,5 @@
-let createServer = require('./http.js').createServer;
+let createServer = require('../lib/http.js').createServer;
+let parse = require('../lib/http.js').parse;
 
 let BODY = `<!DOCTYPE html>
 <html>
@@ -32,8 +33,10 @@ createServer(5556).start((req, resp) => {
 
 createServer(5556).start(async (req, resp) => {
     req.setDeadline($now() + 30000); // 30 secs
-    let h = await req.headers();
-    // console.log(h);
+    let msg_header = await req.headers();
+    // let h = parse(msg_header);
+    // console.log(h.method);
+    // console.log(h.text());
     resp.write(HEADER);
     let bytesSent = await resp.end(BODY);
     // console.log(`${bytesSent} bytes sent`);

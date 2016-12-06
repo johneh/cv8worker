@@ -1,0 +1,89 @@
+var fetch = require('../lib/http.js').fetch;
+var parse = require('../lib/http.js').parse;
+
+fetch({host: 'www.google.com'})
+.then((resp) => {
+    resp.headers()
+    .then((h) => {
+        // $print(h);
+        return resp.body();
+    })
+    .then((b) => {
+        $print(`Content-Length: ${resp.url}:`, $length(b));
+    });
+});
+
+
+fetch({ host: 'news.google.com', schema: 'https'} )
+.then((resp) => {
+    resp.headers()
+    .then((h) => {
+        return resp.body();
+    })
+    .then((b) => {
+        // $print(b.utf8String());
+        $print(`Content-Length: ${resp.url}:`, $length(b));
+    });
+});
+
+
+(async function (url) {
+    try {
+        let resp = await fetch(url);
+        let msg_headers = await resp.headers();
+        console.log(`transfer-encoding: ${url.host} =`,
+                parse(msg_headers).get('transfer-encoding'));
+        var b = await resp.body();
+        $print(`Content-Length: ${resp.url}:`, $length(b));
+    } catch (e) {
+        $print('Error:', e);
+    }
+})({ host: 'www.aol.com'});  // chunked encoding
+
+
+(async function (url) {
+    try {
+        var resp = await fetch(url);
+        var msg_headers = await resp.headers();
+        var h = parse(msg_headers);
+        console.log('STATUS =', h.statusCode);    // -> 200 or ..
+        console.log('CONTENT-TYPE =', h.get('Content-Type'));
+
+        var n = 0;
+        var total = await resp.onBody(function(data, done) {
+			n += $length(data);
+			if (done)
+				return n;
+		});
+        $print(`Content-Length: ${resp.url}:`, total);
+    } catch (e) {
+        $print('Error:', e);
+    }
+})({host: 'www.google.com'});
+
+// like onBody() but slower
+fetch({ host:'www.google.com'})
+.then((resp) => {
+    let bytesReceived = 0;
+
+    /* headers() is optional (always received first anyway see fetch.js) */
+    resp.headers()
+    .then((h) => {
+        // $print(h);
+        resp.readBodyData()
+        .catch(function perror(err) {
+            console.log(err.stack);
+        })
+        .then(function process(result) {
+            bytesReceived += $length(result.value);
+            // console.log('Received', bytesReceived, 'bytes of data so far');
+            if (result.done) {
+                console.log(`Content-Length: ${resp.url}:`, bytesReceived);
+                return;
+            }
+            // Read some more ..
+            return resp.readBodyData().then(process).catch(perror);
+        });
+    });
+});
+
