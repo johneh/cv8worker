@@ -198,7 +198,8 @@ coroutine static void recv_go(js_vm *vm) {
 static void send_go(js_vm *vm, Go_s *g) {
     int rc = mill_pipesend(vm->inq, (void *) &g);
     if (rc == -1) {
-        // FIXME
+        fprintf(stderr, "v8binding.c: send_go() failed\n");
+        Panic(strerror(errno));
     }
 }
 

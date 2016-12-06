@@ -576,6 +576,7 @@ fetch_header(struct http_s *s) {
         return -1;
     }
     s->content_len = CONTENT_LENGTH_NONE;
+
     for(;;) {
         if (-1 == check_room(s))
             return -1;
@@ -781,7 +782,6 @@ do_http_send(v8_state vm, v8_handle hcr, void *ptr) {
                 break;
             }
         } else {
-            assert(rc == -1);
             v8->goreject(vm, hcr, strerror(errno));
             break;
         }
@@ -946,10 +946,19 @@ do_http_close(v8_state vm, int argc, v8_val argv) {
     s->closefd(s->mfd);
 }
 
+/*
+ * Should be safe if there are no reader/writer coroutines.
+ */
 static void
 do_http_free(v8_state vm, int argc, v8_val argv) {
     void *ptr = v8dl->to_pointer(vm, 1, argv);
     http_free(ptr);
+}
+
+static void
+do_http_set_deadline(v8_state vm, int argc, v8_val argv) {
+    struct http_s *s = v8dl->to_pointer(vm, 1, argv);
+    s->deadline = v8dl->to_long(vm, 2, argv);
 }
 
 static coroutine void
@@ -987,7 +996,7 @@ do_http_listen_and_accept(v8_state vm, v8_handle hcr, void *ptr) {
             }
             memset(s, '\0', sizeof (struct http_s));
             s->mfd = csock;
-            s->deadline = -1;   // FIXME need a regular routine ..
+            s->deadline = -1;
             s->writefunc = mill_write;
             s->readfunc = mill_read;
             s->closefunc = tcpclose;
@@ -998,11 +1007,11 @@ do_http_listen_and_accept(v8_state vm, v8_handle hcr, void *ptr) {
     }
 }
 
-
 static v8_ffn ff_table[] = {
     {4, do_http_create, "create", 0 },
     {1, do_http_free, "free", 0 },
     {1, do_http_close, "closefd", 0},
+    {2, do_http_set_deadline, "set_deadline", 0},
     {0, do_http_connect, "connect", V8_DLCORO },
     {0, do_http_send, "send", V8_DLCORO },
     {0, do_http_header, "header", V8_DLCORO },
