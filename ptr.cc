@@ -336,6 +336,8 @@ static void PackSize(const FunctionCallbackInfo<Value>& args) {
 
 static int32_t pack(void *ptr, int fmt, Isolate *isolate, v8Value val) {
     switch (fmt) {
+    case '_':   /* null */
+        return 0;
     case 'c': {
         v8String s = val->ToString(
                 isolate->GetCurrentContext()).ToLocalChecked();
@@ -512,6 +514,10 @@ static v8Value unpack(void *ptr, char fmtc,
     EscapableHandleScope handle_scope(isolate);
     v8Value v = v8Value();
     switch (fmtc) {
+    case '_':
+        *pwidth = 0;
+        v = v8::Null(isolate);
+        break;
     case 'c':
         *pwidth = 1;
         v = String::NewFromUtf8(isolate, (char *) ptr,

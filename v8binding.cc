@@ -394,7 +394,7 @@ int v8_goresolve(js_vm *vm, v8_handle hcr,
     return (rc == 0);
 }
 
-int v8_goreject(js_vm *vm, v8_handle hcr, char *message) {
+int v8_goreject(js_vm *vm, v8_handle hcr, const char *message) {
     GoCallback *cb = new GoCallback;
     cb->h = hcr;    // Delay validating handle to avoid lock contention.
     cb->data = reinterpret_cast<void *>(estrdup(message, strlen(message)));

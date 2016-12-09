@@ -55,7 +55,7 @@ struct v8_fn_s {
 
     v8_handle (*goroutine)(v8_state, Fngo);
     int (*goresolve)(v8_state, v8_handle, volatile void *, int, int);
-    int (*goreject)(v8_state, v8_handle, char *);
+    int (*goreject)(v8_state, v8_handle, const char *);
 
     const char *(*errstr)(v8_state vm);
     v8_handle (*callstr)(v8_state vm, const char *source,

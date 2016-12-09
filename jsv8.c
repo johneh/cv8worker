@@ -21,7 +21,9 @@ js_vm *js_vmopen(js_worker jw) {
         mill_panic("js_vmopen: mill_worker expected");
     js_vm *vm = js8_vmnew(w);   /* This runs in the main thread. */
     assert(*((mill_worker *) vm) == WORKER(vm));
-    /* Run js8_vminit() in the V8 thread. */
+
+    /* This 2nd part of the initialization process actually creates the V8 "isolate".
+     * Runs js8_vminit() in the worker(V8) thread. */
     int rc = task_run(w, (void *) js8_vminit, vm, -1);
     assert(rc == 0);
     return vm;
