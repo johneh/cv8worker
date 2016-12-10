@@ -216,6 +216,8 @@ enum {
 
 static int32_t packsize(int fmt, Isolate *isolate, v8Value val) {
     switch (fmt) {
+    case '_':
+        return 0;
     case 'c':
     case 'b':
     case 'B':
