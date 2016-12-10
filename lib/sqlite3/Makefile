@@ -12,10 +12,10 @@ SO_CFLAGS = -fPIC -Wall -c -g -I. -I$(TOPDIR)
 SO_LDFLAGS = -shared
 
 sqlite3.o: $(TOPDIR)/jsv8dlfn.h sqlite3.c
-	$(CC) $(SO_CFLAGS) sqlite3.c
+	$(CC) $(SO_CFLAGS) -I$(MILL_INCLUDES) sqlite3.c
 
 libsql3.so: sqlite3.o
-	$(CC) $(SO_LDFLAGS) sqlite3.o -o $@ $(SQLITE3_LIBS)
+	$(CC) $(SO_LDFLAGS) sqlite3.o -o $@ $(MILL_LIBS) $(SQLITE3_LIBS)
 
 clean:
 	rm -f *.o

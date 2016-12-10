@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include "jsv8dlfn.h"
+#include "libpill.h"
 
 static coroutine void
 do_sqlite3_open(v8_state vm, v8_handle hcr, void *ptr) {
@@ -238,11 +239,14 @@ static coroutine void
 do_sqlite3_each(v8_state vm, v8_handle hcr, void *ptr) {
     struct each_s {
         struct sqlite3_stmt *stmt;
-        unsigned int count;
+        unsigned int max_rows;
+        unsigned int batch_rows;
     };
     struct each_s *rr = ptr;
     int ret = SQLITE_DONE;
-    unsigned int n = rr->count;
+    unsigned int n = rr->max_rows, count = 0;
+    if (rr->batch_rows == 0)
+        rr->batch_rows = rr->max_rows;
     while (n > 0 && (ret = sqlite3_step(rr->stmt)) == SQLITE_ROW) {
         int i, ncols = sqlite3_column_count(rr->stmt);
         struct fb_buffer fb = {0};
@@ -253,6 +257,10 @@ do_sqlite3_each(v8_state vm, v8_handle hcr, void *ptr) {
         }
         v8->goresolve(vm, hcr, fb.buf, fb.len, 0);
         n--;
+        if (++count == rr->batch_rows) {
+            count = 0;
+            mill_yield();
+        }
     }
     if (n == 0 || ret == SQLITE_DONE)
         v8->goresolve(vm, hcr, NULL, 0, 1);
