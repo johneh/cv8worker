@@ -21,10 +21,8 @@ select customerNumber, customerName from customers where customerNumber > ?
         await sth.bind(400, 425);
         count = 0;
         await sth.each((row) => {
-            if (row !== null) {
-                console.log(row[0], row[1]);
-                count++;
-            }
+            console.log(row[0], row[1]);
+            count++;
         });
 
         console.log(`========== each: ${count} rows fetched. ==========`);
