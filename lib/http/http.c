@@ -943,7 +943,8 @@ do_http_create(v8_state vm, int argc, v8_val argv) {
 static void
 do_http_close(v8_state vm, int argc, v8_val argv) {
     struct http_s *s = v8dl->to_pointer(vm, 1, argv);
-    s->closefd(s->mfd);
+    if (s->mfd) /* maybe NULL if connect failed/timed-out */
+        s->closefd(s->mfd);
 }
 
 /*
