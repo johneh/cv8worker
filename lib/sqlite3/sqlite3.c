@@ -8,31 +8,31 @@
 #include "libpill.h"
 
 static coroutine void
-do_sqlite3_open(v8_state vm, v8_handle hcr, void *ptr) {
+do_sqlite3_open(v8_state vm, v8_val cr, void *ptr) {
     char *filename = ptr;
     sqlite3 *db = NULL;
     if (sqlite3_open(filename, & db) != SQLITE_OK) {
         const char *emsg = sqlite3_errmsg(db);
         sqlite3_close_v2(db);
-        v8->goreject(vm, hcr, emsg);
+        jsv8->goreject(vm, cr, emsg);
     } else
-        v8->goresolve(vm, hcr, db, -1, 1);
+        jsv8->goresolve(vm, cr, db, -1, 1);
 }
 
 static coroutine void
-do_sqlite3_close(v8_state vm, v8_handle hcr, void *ptr) {
+do_sqlite3_close(v8_state vm, v8_val cr, void *ptr) {
     sqlite3 *db = ptr;
     int ret = sqlite3_close_v2(db);
     if (ret != SQLITE_OK)
-        v8->goreject(vm, hcr, sqlite3_errstr(ret));
+        jsv8->goreject(vm, cr, sqlite3_errstr(ret));
     else
-        v8->goresolve(vm, hcr, NULL, 0, 1);
+        jsv8->goresolve(vm, cr, NULL, 0, 1);
 }
 
 
 /* XXX: unlike prepare(), can have multiple sql statements seperated by semi */
 static coroutine void
-do_sqlite3_exec(v8_state vm, v8_handle hcr, void *ptr) {
+do_sqlite3_exec(v8_state vm, v8_val cr, void *ptr) {
     struct exec_s {
         sqlite3 *db;
         char *query;
@@ -40,14 +40,14 @@ do_sqlite3_exec(v8_state vm, v8_handle hcr, void *ptr) {
     struct exec_s *exs = ptr;
     char *errmsg;
     if (sqlite3_exec(exs->db, exs->query, 0, 0, & errmsg) != SQLITE_OK) {
-        v8->goreject(vm, hcr, errmsg);
+        jsv8->goreject(vm, cr, errmsg);
         sqlite3_free(errmsg);
     } else
-        v8->goresolve(vm, hcr, NULL, 0, 1);
+        jsv8->goresolve(vm, cr, NULL, 0, 1);
 }
 
 static coroutine void
-do_sqlite3_prepare(v8_state vm, v8_handle hcr, void *ptr) {
+do_sqlite3_prepare(v8_state vm, v8_val cr, void *ptr) {
     struct prepare_s {
         sqlite3 *db;
         int sqlen;
@@ -58,33 +58,33 @@ do_sqlite3_prepare(v8_state vm, v8_handle hcr, void *ptr) {
     int ret = sqlite3_prepare_v2(ps->db, ps->sql, ps->sqlen, & stmt, 0);
     if (ret != SQLITE_OK) {
         const char *emsg = sqlite3_errstr(ret);
-        v8->goreject(vm, hcr, emsg);
+        jsv8->goreject(vm, cr, emsg);
     } else
-        v8->goresolve(vm, hcr, stmt, -1, 1);
+        jsv8->goresolve(vm, cr, stmt, -1, 1);
 }
 
 static coroutine void
-do_sqlite3_finalize(v8_state vm, v8_handle hcr, void *ptr) {
+do_sqlite3_finalize(v8_state vm, v8_val cr, void *ptr) {
     sqlite3_stmt *stmt = ptr;
     int ret = sqlite3_finalize(stmt);
     if (ret != SQLITE_OK)
-        v8->goreject(vm, hcr, sqlite3_errstr(ret));
+        jsv8->goreject(vm, cr, sqlite3_errstr(ret));
     else
-        v8->goresolve(vm, hcr, NULL, 0, 1);
+        jsv8->goresolve(vm, cr, NULL, 0, 1);
 }
 
 static coroutine void
-do_sqlite3_reset(v8_state vm, v8_handle hcr, void *ptr) {
+do_sqlite3_reset(v8_state vm, v8_val cr, void *ptr) {
     sqlite3_stmt *stmt = ptr;
     int ret = sqlite3_reset(stmt);
     if (ret != SQLITE_OK)
-        v8->goreject(vm, hcr, sqlite3_errstr(ret));
+        jsv8->goreject(vm, cr, sqlite3_errstr(ret));
     else
-        v8->goresolve(vm, hcr, NULL, 0, 1);
+        jsv8->goresolve(vm, cr, NULL, 0, 1);
 }
 
 static coroutine void
-do_sqlite3_bind(v8_state vm, v8_handle hcr, void *ptr) {
+do_sqlite3_bind(v8_state vm, v8_val cr, void *ptr) {
     struct bind_s {
         sqlite3_stmt *stmt;
         char buf[1]; /* format string + data */
@@ -128,11 +128,11 @@ do_sqlite3_bind(v8_state vm, v8_handle hcr, void *ptr) {
             break;
         }
         if (ret != SQLITE_OK) {
-            v8->goreject(vm, hcr, sqlite3_errstr(ret));
+            jsv8->goreject(vm, cr, sqlite3_errstr(ret));
             return;
         }
     }
-    v8->goresolve(vm, hcr, NULL, 0, 1);
+    jsv8->goresolve(vm, cr, NULL, 0, 1);
 }
 
 
@@ -214,13 +214,13 @@ write_column(sqlite3_stmt *stmt, int i, int coltype, struct fb_buffer *b) {
 
 /* step and a fetch result row */
 static coroutine void
-do_sqlite3_next(v8_state vm, v8_handle hcr, void *ptr) {
+do_sqlite3_next(v8_state vm, v8_val cr, void *ptr) {
     struct sqlite3_stmt *stmt = ptr;
     int ret = sqlite3_step(stmt);
     if (ret == SQLITE_DONE)
-        v8->goresolve(vm, hcr, NULL, 0, 1);
+        jsv8->goresolve(vm, cr, NULL, 0, 1);
     else if (ret != SQLITE_ROW)
-        v8->goreject(vm, hcr, sqlite3_errstr(ret));
+        jsv8->goreject(vm, cr, sqlite3_errstr(ret));
     else {
         int i, ncols = sqlite3_column_count(stmt);
         struct fb_buffer fb = {0};
@@ -229,14 +229,14 @@ do_sqlite3_next(v8_state vm, v8_handle hcr, void *ptr) {
         for (i = 0; i < ncols; i++) {
             write_column(stmt, i, sqlite3_column_type(stmt, i), &fb);
         }
-        v8->goresolve(vm, hcr, fb.buf, fb.len, 1);
+        jsv8->goresolve(vm, cr, fb.buf, fb.len, 1);
     }
 }
 
 
 /* step and fetch N result rows */
 static coroutine void
-do_sqlite3_each(v8_state vm, v8_handle hcr, void *ptr) {
+do_sqlite3_each(v8_state vm, v8_val cr, void *ptr) {
     struct each_s {
         struct sqlite3_stmt *stmt;
         unsigned int max_rows;
@@ -255,7 +255,7 @@ do_sqlite3_each(v8_state vm, v8_handle hcr, void *ptr) {
         for (i = 0; i < ncols; i++) {
             write_column(rr->stmt, i, sqlite3_column_type(rr->stmt, i), &fb);
         }
-        v8->goresolve(vm, hcr, fb.buf, fb.len, 0);
+        jsv8->goresolve(vm, cr, fb.buf, fb.len, 0);
         n--;
         if (++count == rr->batch_rows) {
             count = 0;
@@ -263,10 +263,10 @@ do_sqlite3_each(v8_state vm, v8_handle hcr, void *ptr) {
         }
     }
     if (n == 0 || ret == SQLITE_DONE)
-        v8->goresolve(vm, hcr, NULL, 0, 1);
+        jsv8->goresolve(vm, cr, NULL, 0, 1);
     else {
         assert(ret != SQLITE_ROW);
-        v8->goreject(vm, hcr, sqlite3_errstr(ret));
+        jsv8->goreject(vm, cr, sqlite3_errstr(ret));
     }
 }
 
@@ -283,6 +283,6 @@ static v8_ffn ff_table[] = {
     {0},
 };
 
-int JS_LOAD(v8_state vm, v8_handle hlib) {
+int JS_LOAD(v8_state vm, v8_val hlib) {
     JS_EXPORT(ff_table);
 }

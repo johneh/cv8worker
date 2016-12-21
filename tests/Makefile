@@ -10,7 +10,9 @@ ifdef GCTEST
 EXTRA_FLAGS += -DGCTEST=1
 endif
 
-all: $(BINS)
+all:
+
+# $(BINS)
 
 words.o: $(TOPDIR)/jsv8.h $(TOPDIR)/jsdef.h words.c
 	$(CC) $(CFLAGS) $(EXTRA_FLAGS) $(INCLUDES) -c words.c
@@ -32,12 +34,6 @@ testgo: testgo.o $(TOPDIR)/libcv8.a
 
 SO_CFLAGS = -fPIC -Wall -c -g -I. -I$(TOPDIR)
 SO_LDFLAGS = -shared
-
-math.o: $(TOPDIR)/jsv8dlfn.h math.c
-	$(CC) $(SO_CFLAGS) math.c
-
-libmath.so: math.o
-	$(CC) $(SO_LDFLAGS) math.o -o $@
 
 CAIRO_DIR := /usr/include/cairo
 cairojs.c: $(TOPDIR)/tools/gencode.cc

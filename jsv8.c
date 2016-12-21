@@ -15,11 +15,11 @@
 
 #define WORKER(vm)  *((mill_worker *) (vm))
 
-js_vm *js_vmopen(js_worker jw) {
+v8_state js_vmopen(js_worker jw) {
     mill_worker w = (mill_worker) jw;
     if (!w)
         mill_panic("js_vmopen: mill_worker expected");
-    js_vm *vm = js8_vmnew(w);   /* This runs in the main thread. */
+    v8_state vm = js8_vmnew(w);   /* This runs in the main thread. */
     assert(*((mill_worker *) vm) == WORKER(vm));
 
     /* This 2nd part of the initialization process actually creates the V8 "isolate".
@@ -29,7 +29,7 @@ js_vm *js_vmopen(js_worker jw) {
     return vm;
 }
 
-void js_vmclose(js_vm *vm) {
+void js_vmclose(v8_state vm) {
     /* Close the write end of the pipe from the V8 thread. */
     (void) v8_run(vm, "$close();");
     js8_vmclose(vm);
@@ -41,71 +41,64 @@ static int v8_sched(struct js8_cmd_s *cmd) {
     return task_run(WORKER(cmd->vm), (void *) js8_do, cmd, -1);
 }
 
-/* Returns NULL if there was an error in V8. */
-v8_handle v8_eval(js_vm *vm, const char *src) {
+/* Returned value should be checked for JS exception. */
+v8_val v8_eval(v8_state vm, const char *src) {
     struct js8_cmd_s c;
     c.type = V8COMPILERUN;
     c.vm = vm;
-    c.source = (char *) src;
+    c.h1.stp = (char *) src;
     v8_sched(&c);
-    return c.h;
+    return c.h2;
 }
 
-int v8_run(js_vm *vm, const char *src) {
-    v8_handle h = v8_eval(vm, src);
-    if (!h)
+int v8_run(v8_state vm, const char *src) {
+    v8_val r = v8_eval(vm, src);
+    if (!r.type)
         return 0;
-    v8_reset(vm, h);
+    jsv8->reset(vm, r);
     return 1;
 }
 
 //
-// v8_call(vm, func, NULL, (v8_args){0})
+// v8_call(vm, func, jsv8->global(vm), (v8_args){0})
 // -> this === Global and 0 args
 //
-/* Returns NULL if there was an error in V8. */
-v8_handle v8_call(js_vm *vm, v8_handle hfunc,
-            v8_handle hself, v8_args hargs) {
+/* Returned value should be checked for JS exception. */
+v8_val v8_call(v8_state vm, v8_val hfunc,
+            v8_val hself, int nargs, v8_val *args) {
     struct js8_cmd_s c;
     c.type = V8CALL;
     c.vm = vm;
     c.h1 = hfunc;
-    int i, nargs = 0;
-    for (i = 0; i < 4 && hargs[i]; i++) {
-        nargs++;
-        c.a[i] = hargs[i];
-    }
+    // FIXME panic if nargs > 4
+    memcpy(&c.a, args, nargs * sizeof (v8_val));
     c.nargs = nargs;
-    c.h = hself;
+    c.h2 = hself;
     v8_sched(&c);
-    return c.h;
+    return c.h2;
 }
 
 /* SOURCE is a function expression.
- Returns NULL if there was an error in V8. */
-v8_handle v8_callstr(js_vm *vm, const char *source,
-            v8_handle hself, v8_args hargs) {
+ Returned value should be checked for JS exception. */
+v8_val v8_callstr(v8_state vm, const char *source,
+            v8_val hself, int nargs, v8_val *args) {
     struct js8_cmd_s c;
     c.type = V8CALLSTR;
     assert(source);
     c.vm = vm;
-    c.source = (char *)source;
-    int i, nargs = 0;
-    for (i = 0; i < 4 && hargs[i]; i++) {
-        nargs++;
-        c.a[i] = hargs[i];
-    }
+    c.h1.stp = (char *)source;
+    memcpy(&c.a, args, nargs * sizeof (v8_val));
     c.nargs = nargs;
-    c.h = hself;
+    c.h2 = hself;
     v8_sched(&c);
-    return c.h;
+    return c.h2;
 }
 
-int v8_gc(js_vm *vm) {
+int v8_gc(v8_state vm) {
     struct js8_cmd_s c;
     c.type = V8GC;
     c.vm = vm;
     v8_sched(&c);
-    return c.weak_counter;
+    return V8_TOINT32(c.h2);
 }
 

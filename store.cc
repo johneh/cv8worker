@@ -41,7 +41,7 @@ unsigned PersistentStore::Set(v8Value value) {
     HandleScope handle_scope(isolate_);
     unsigned slot = FindSlot();
 
-    js_vm *vm = reinterpret_cast<js_vm*>(isolate_->GetData(0));
+    v8_state vm = reinterpret_cast<js_vm*>(isolate_->GetData(0));
     v8Context context = v8Context::New(isolate_, vm->context);
     Context::Scope context_scope(context);
 
@@ -67,7 +67,7 @@ v8Value PersistentStore::Get(unsigned slot) {
     if (!IsSlotMarked(a_, size_, slot))
         return v8Value();
     EscapableHandleScope handle_scope(isolate_);
-    js_vm *vm = reinterpret_cast<js_vm*>(isolate_->GetData(0));
+    v8_state vm = reinterpret_cast<js_vm*>(isolate_->GetData(0));
     v8Context context = v8Context::New(isolate_, vm->context);
     Context::Scope context_scope(context);
     v8Value v = v8Object::New(isolate_, container_)
@@ -78,7 +78,7 @@ v8Value PersistentStore::Get(unsigned slot) {
 void PersistentStore::Dispose(unsigned slot) {
     if (IsSlotMarked(a_, size_, slot)) {
         HandleScope handle_scope(isolate_);
-        js_vm *vm = reinterpret_cast<js_vm*>(isolate_->GetData(0));
+        v8_state vm = reinterpret_cast<v8_state>(isolate_->GetData(0));
         v8Context context = v8Context::New(isolate_, vm->context);
         Context::Scope context_scope(context);
         v8Object::New(isolate_, container_)->Set(context,

@@ -51,7 +51,7 @@ struct http_s {
 
     int (*ondata)(char *buf, int size, void *q, int done);
     v8_state vm;
-    v8_handle hcr;
+    v8_val cr;
 
     int state;
 
@@ -747,23 +747,23 @@ http_create(const char *host, int port, int useTLS) {
 }
 
 static coroutine void
-do_http_connect(v8_state vm, v8_handle hcr, void *ptr) {
+do_http_connect(v8_state vm, v8_val cr, void *ptr) {
     struct http_s *s = ptr;
     ipaddr addr;
     int rc = ipremote(&addr, s->host, s->port, 0, s->deadline);
     if (rc != 0) {
-        v8->goreject(vm, hcr, strerror(errno));
+        jsv8->goreject(vm, cr, strerror(errno));
     } else {
         s->mfd = s->connectfunc(&addr, s->deadline);
         if (!s->mfd)
-            v8->goreject(vm, hcr, strerror(errno));
+            jsv8->goreject(vm, cr, strerror(errno));
         else
-            v8->goresolve(vm, hcr, NULL, 0, 1);
+            jsv8->goresolve(vm, cr, NULL, 0, 1);
     }
 }
 
 static coroutine void
-do_http_send(v8_state vm, v8_handle hcr, void *ptr) {
+do_http_send(v8_state vm, v8_val cr, void *ptr) {
     struct send_s {
         struct http_s *s;
         int wlen;
@@ -778,25 +778,25 @@ do_http_send(v8_state vm, v8_handle hcr, void *ptr) {
         if (rc >= 0) {  /* sending 0 bytes shouldn't be an error */
             len += rc;
             if (len == ws->wlen) {
-                v8->goresolve(vm, hcr, NULL, 0, 1);
+                jsv8->goresolve(vm, cr, NULL, 0, 1);
                 break;
             }
         } else {
-            v8->goreject(vm, hcr, strerror(errno));
+            jsv8->goreject(vm, cr, strerror(errno));
             break;
         }
     }
 }
 
 static coroutine void
-do_http_header(v8_state vm, v8_handle hcr, void *p1) {
+do_http_header(v8_state vm, v8_val cr, void *p1) {
     struct http_s *s = p1;
     int rc = fetch_header(s);
     if (rc < 0) {
         assert(s->state < 0);
-        v8->goreject(vm, hcr, strerror(-s->state));
+        jsv8->goreject(vm, cr, strerror(-s->state));
     } else {
-        v8->goresolve(vm, hcr, s->head, s->head_len, 1);
+        jsv8->goresolve(vm, cr, s->head, s->head_len, 1);
         s->head = NULL;
     }
 }
@@ -822,19 +822,19 @@ v8_reada(char *buf, int size, void *p1, int done) {
 
 /* read complete body */
 static coroutine void
-do_http_reada(v8_state vm, v8_handle hcr, void *p1) {
+do_http_reada(v8_state vm, v8_val cr, void *p1) {
     struct http_s *s = p1;
     int rc;
 
     if (s->state != HEADER_COMPLETE) {
         int err = s->state < 0 ? -s->state : EPROTO;
-        v8->goreject(vm, hcr, strerror(err));
+        jsv8->goreject(vm, cr, strerror(err));
         return;
     }
 
     assert(s->body == NULL);
     s->vm = vm;
-    s->hcr = hcr;
+    s->cr = cr;
     s->ondata = v8_reada;
     do {
         rc = fetch_body(s);
@@ -842,16 +842,15 @@ do_http_reada(v8_state vm, v8_handle hcr, void *p1) {
 
     if (rc < 0) {
         s->state = -errno;
-        v8->goreject(vm, hcr, strerror(errno));
+        jsv8->goreject(vm, cr, strerror(errno));
     } else {
-        v8->goresolve(vm, hcr, s->body, s->body_len, 1);
+        jsv8->goresolve(vm, cr, s->body, s->body_len, 1);
         s->body = NULL;
     }
 }
 
 static int v8_readp(char *buf, int size, void *p1, int done) {
     struct http_s *s = p1;
-
     s->body_len += size;
     if (done) {
         /* fprintf(stderr, "body_len = %d, content_len = %d\n",
@@ -859,22 +858,22 @@ static int v8_readp(char *buf, int size, void *p1, int done) {
         s->state = BODY_COMPLETE;
     }
     /* buf memory disowned to V8 */
-    v8->goresolve(s->vm, s->hcr, buf, size, done);
+    jsv8->goresolve(s->vm, s->cr, buf, size, done);
     return 0;
 }
 
 /* push data */
 static coroutine void
-do_http_readp(v8_state vm, v8_handle hcr, void *p1) {
+do_http_readp(v8_state vm, v8_val cr, void *p1) {
     struct http_s *s = p1;
     int rc;
     if (s->state != HEADER_COMPLETE) {
         int err = s->state < 0 ? -s->state : EPROTO;
-        v8->goreject(vm, hcr, strerror(err));
+        jsv8->goreject(vm, cr, strerror(err));
         return;
     }
     s->vm = vm;
-    s->hcr = hcr;
+    s->cr = cr;
     s->ondata = v8_readp;
     do {
         rc = fetch_body(s);
@@ -882,7 +881,7 @@ do_http_readp(v8_state vm, v8_handle hcr, void *p1) {
 
     if (rc < 0) {
         s->state = -errno;
-        v8->goreject(vm, hcr, strerror(errno));
+        jsv8->goreject(vm, cr, strerror(errno));
     }
 }
 
@@ -900,39 +899,39 @@ v8_readb(char *buf, int size, void *p1, int done) {
     }
 
     /* buf memory disowned to V8 */
-    v8->goresolve(s->vm, s->hcr, buf, size, done|GOPULL);
+    jsv8->goresolve(s->vm, s->cr, buf, size, done|GOPULL);
     return 0;
 }
 
 /* pull data */
 static coroutine void
-do_http_readb(v8_state vm, v8_handle hcr, void *p1) {
+do_http_readb(v8_state vm, v8_val cr, void *p1) {
     struct http_s *s = p1;
     int rc;
     if (s->state != HEADER_COMPLETE) {
         int err = s->state < 0 ? -s->state : EPROTO;
-        v8->goreject(vm, hcr, strerror(err));
+        jsv8->goreject(vm, cr, strerror(err));
         return;
     }
     s->vm = vm;
-    s->hcr = hcr;
+    s->cr = cr;
     s->ondata = v8_readb;
     rc = fetch_body(s);
     if (rc < 0) {
         s->state = -errno;
-        v8->goreject(vm, hcr, strerror(errno));
+        jsv8->goreject(vm, cr, strerror(errno));
     }
 }
 
-static void
-do_http_create(v8_state vm, int argc, v8_val argv) {
-    char *host = v8dl->to_string(vm, 1, argv);
-    int port = v8dl->to_int(vm, 2, argv);
-    int useTLS = v8dl->to_int(vm, 4, argv);
+static v8_val
+do_http_create(v8_state vm, int argc, v8_val argv[]) {
+    char *host = V8_TOSTR(argv[0]);
+    int port = V8_TOINT32(argv[1]);
+    int useTLS = V8_TOINT32(argv[3]);
     struct http_s *s = http_create(host, port, useTLS);
     if (s)
-        s->deadline = v8dl->to_long(vm, 3, argv);
-    v8dl->from_pointer(vm, s, argv);
+        s->deadline = V8_TODOUBLE(argv[2]);
+    return V8_PTR(s);
 }
 
 /* Close the file descriptor.
@@ -940,30 +939,33 @@ do_http_create(v8_state vm, int argc, v8_val argv) {
  *      Should not to be used to cancel a connection.
  *  TODO: execute in a main thread goroutine (fire_and_forget). 
  */
-static void
-do_http_close(v8_state vm, int argc, v8_val argv) {
-    struct http_s *s = v8dl->to_pointer(vm, 1, argv);
+static v8_val
+do_http_close(v8_state vm, int argc, v8_val argv[]) {
+    struct http_s *s = V8_TOPTR(argv[0]);
     if (s->mfd) /* maybe NULL if connect failed/timed-out */
         s->closefd(s->mfd);
+    return V8_VOID;
 }
 
 /*
  * Should be safe if there are no reader/writer coroutines.
  */
-static void
-do_http_free(v8_state vm, int argc, v8_val argv) {
-    void *ptr = v8dl->to_pointer(vm, 1, argv);
+static v8_val
+do_http_free(v8_state vm, int argc, v8_val argv[]) {
+    void *ptr = V8_TOPTR(argv[0]);
     http_free(ptr);
+    return V8_VOID;
 }
 
-static void
-do_http_set_deadline(v8_state vm, int argc, v8_val argv) {
-    struct http_s *s = v8dl->to_pointer(vm, 1, argv);
-    s->deadline = v8dl->to_long(vm, 2, argv);
+static v8_val
+do_http_set_deadline(v8_state vm, int argc, v8_val argv[]) {
+    struct http_s *s = V8_TOPTR(argv[0]);
+    s->deadline = V8_TODOUBLE(argv[1]);
+    return V8_VOID;
 }
 
 static coroutine void
-do_http_listen_and_accept(v8_state vm, v8_handle hcr, void *ptr) {
+do_http_listen_and_accept(v8_state vm, v8_val cr, void *ptr) {
     struct ip_s {
         int port;
         int mode;
@@ -976,13 +978,13 @@ do_http_listen_and_accept(v8_state vm, v8_handle hcr, void *ptr) {
     int rc = iplocal(&address, ip->name[0] == '\0' ? NULL : ip->name,
                         ip->port, ip->mode);
     if (rc != 0) {
-        v8->goreject(vm, hcr, strerror(errno));
+        jsv8->goreject(vm, cr, strerror(errno));
         return;
     }
     mill_fd lsock = tcplisten(&address,
                 ip->backlog <= 0 ? 128 : ip->backlog, ip->reuseport);
     if (!lsock) {
-        v8->goreject(vm, hcr, strerror(errno));
+        jsv8->goreject(vm, cr, strerror(errno));
         return;
     }
 
@@ -992,7 +994,7 @@ do_http_listen_and_accept(v8_state vm, v8_handle hcr, void *ptr) {
             struct http_s *s = emalloc(sizeof (struct http_s));
             if (!s) {
                 errno = ENOMEM;
-                v8->goreject(vm, hcr, strerror(errno));
+                jsv8->goreject(vm, cr, strerror(errno));
                 break;
             }
             memset(s, '\0', sizeof (struct http_s));
@@ -1002,17 +1004,17 @@ do_http_listen_and_accept(v8_state vm, v8_handle hcr, void *ptr) {
             s->readfunc = mill_read;
             s->closefunc = tcpclose;
             s->closefd = mill_fdclose;
-            v8->goresolve(vm, hcr, s, -1, 0);
+            jsv8->goresolve(vm, cr, s, -1, 0);
         } /* else 
             ignore error .. */
     }
 }
 
 static v8_ffn ff_table[] = {
-    {4, do_http_create, "create", 0 },
-    {1, do_http_free, "free", 0 },
-    {1, do_http_close, "closefd", 0},
-    {2, do_http_set_deadline, "set_deadline", 0},
+    {4, do_http_create, "create", V8_CFUNC },
+    {1, do_http_free, "free", V8_CFUNC },
+    {1, do_http_close, "closefd", V8_CFUNC},
+    {2, do_http_set_deadline, "set_deadline", V8_CFUNC},
     {0, do_http_connect, "connect", V8_DLCORO },
     {0, do_http_send, "send", V8_DLCORO },
     {0, do_http_header, "header", V8_DLCORO },
@@ -1023,6 +1025,6 @@ static v8_ffn ff_table[] = {
     {0},
 };
 
-int JS_LOAD(v8_state vm, v8_handle hlib) {
+int JS_LOAD(v8_state vm, v8_val hlib) {
     JS_EXPORT(ff_table);
 }

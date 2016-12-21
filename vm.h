@@ -5,12 +5,13 @@
 
 class PersistentStore;
 
+struct v8_fn_s;
+
 // V8 state (Isolate)
 
 struct js_vm_s {
     mill_worker w;  // must be the first
     v8::Isolate *isolate;
-    char *errstr;
 
     /* Remote coroutines */
     mill_pipe inq;
@@ -18,13 +19,6 @@ struct js_vm_s {
 
     chan ch;
     int ncoro;
-
-    v8_handle global_handle;
-    v8_handle null_handle;
-    v8_handle undef_handle;
-    v8_handle nullptr_handle;
-
-#define NUM_PERMANENT_HANDLES   4
 
     v8::Persistent<v8::Context> context;
     v8::Persistent<v8::ObjectTemplate> extptr_template;
@@ -39,14 +33,17 @@ struct js_vm_s {
 
     PersistentStore *store_;
 
-    char *dlstr[MAXARGS];
-    int dlstr_idx;
-
-    void *gcptr;
 #ifdef V8TEST
     int weak_counter;
 #endif
+
 };
+
+#define NUM_PERMANENT_HANDLES   3
+
+#define GLOBAL_HANDLE   1
+#define NULL_HANDLE 2
+#define NULLPTR_HANDLE  3
 
 typedef struct js_vm_s js_vm;
 
@@ -74,7 +71,7 @@ isolate->ThrowException(Exception::Error(\
     String::NewFromUtf8(isolate, (m))));\
 return; } while(0)
 
-static inline v8::Local<v8::String> V8_STR(v8::Isolate* isolate,
+static inline v8::Local<v8::String> v8STR(v8::Isolate* isolate,
             const char* x) {
   return v8::String::NewFromUtf8(isolate, x, v8::NewStringType::kNormal)
       .ToLocalChecked();

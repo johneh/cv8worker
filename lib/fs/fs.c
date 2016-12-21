@@ -15,18 +15,18 @@
 static char *readfile(const char *filename, size_t *len);
 
 static coroutine void
-do_readfile(v8_state vm, v8_handle hcr, void *ptr) {
+do_readfile(v8_state vm, v8_val hcr, void *ptr) {
     char *filename = ptr;
     size_t sz;
     char *data = readfile(filename, &sz);
     if (!data)
-        v8->goreject(vm, hcr, strerror(errno));
+        jsv8->goreject(vm, hcr, strerror(errno));
     else
-        v8->goresolve(vm, hcr, data, sz, 1);
+        jsv8->goresolve(vm, hcr, data, sz, 1);
 }
 
 static coroutine void
-do_open(v8_state vm, v8_handle hcr, void *ptr) {
+do_open(v8_state vm, v8_val hcr, void *ptr) {
     struct open_s {
         int fd;
         int mode;
@@ -36,13 +36,13 @@ do_open(v8_state vm, v8_handle hcr, void *ptr) {
     struct open_s *args = ptr;  /* input and output */
     args->fd = open_a(args->filename, args->flags, args->mode);
     if (args->fd < 0)
-        v8->goreject(vm, hcr, strerror(errno));
+        jsv8->goreject(vm, hcr, strerror(errno));
     else
-        v8->goresolve(vm, hcr, (void *) args, -1, 1);
+        jsv8->goresolve(vm, hcr, (void *) args, -1, 1);
 }
 
 static coroutine void
-do_pwrite(v8_state vm, v8_handle hcr, void *ptr) {
+do_pwrite(v8_state vm, v8_val hcr, void *ptr) {
     struct pwrite_s {
         int fd; /* input and output(bytes written) */
         unsigned offset;
@@ -52,15 +52,15 @@ do_pwrite(v8_state vm, v8_handle hcr, void *ptr) {
     struct pwrite_s *args = ptr;
     ssize_t sz = pwrite_a(args->fd, args->buf, args->count, args->offset);
     if (sz < 0)
-        v8->goreject(vm, hcr, strerror(errno));
+        jsv8->goreject(vm, hcr, strerror(errno));
     else {
         args->fd = (int) sz;
-        v8->goresolve(vm, hcr, (void *) args, -1, 1);
+        jsv8->goresolve(vm, hcr, (void *) args, -1, 1);
     }
 }
 
 static coroutine void
-do_pread(v8_state vm, v8_handle hcr, void *ptr) {
+do_pread(v8_state vm, v8_val hcr, void *ptr) {
     struct pread_s {
         int fd;
         unsigned offset;
@@ -69,46 +69,46 @@ do_pread(v8_state vm, v8_handle hcr, void *ptr) {
     struct pread_s *args = ptr;
     void *buf = malloc(args->count+1);
     if (!buf) {
-        v8->goreject(vm, hcr, strerror(ENOMEM));
+        jsv8->goreject(vm, hcr, strerror(ENOMEM));
         return;
     }
     ssize_t sz = pread_a(args->fd, buf, args->count, args->offset);
     if (sz < 0) {
         free(buf);
-        v8->goreject(vm, hcr, strerror(errno));
+        jsv8->goreject(vm, hcr, strerror(errno));
     } else {
         if (sz == 0) {
             free(buf);
             buf = NULL;
         }
-        v8->goresolve(vm, hcr, buf, (int) sz, 1);
+        jsv8->goresolve(vm, hcr, buf, (int) sz, 1);
     }
 }
 
 static coroutine void
-do_close(v8_state vm, v8_handle hcr, void *ptr) {
+do_close(v8_state vm, v8_val hcr, void *ptr) {
     struct close_s {
         int fd;
     } __attribute__((packed));
     struct close_s *args = ptr;
     int rc = close_a(args->fd);
     if (rc < 0)
-        v8->goreject(vm, hcr, strerror(errno));
+        jsv8->goreject(vm, hcr, strerror(errno));
     else
-        v8->goresolve(vm, hcr, NULL, -1, 1);
+        jsv8->goresolve(vm, hcr, NULL, -1, 1);
 }
 
 static coroutine void
-do_unlink(v8_state vm, v8_handle hcr, void *ptr) {
+do_unlink(v8_state vm, v8_val hcr, void *ptr) {
     struct unlink_s {
         char filename[1];
     } __attribute__((packed));
     struct unlink_s *args = ptr;  /* input and output */
     int rc = unlink_a(args->filename);
     if (rc < 0)
-        v8->goreject(vm, hcr, strerror(errno));
+        jsv8->goreject(vm, hcr, strerror(errno));
     else
-        v8->goresolve(vm, hcr, NULL, -1, 1);
+        jsv8->goresolve(vm, hcr, NULL, -1, 1);
 }
 
 static char *
@@ -147,9 +147,9 @@ er:
     return NULL;
 }
 
-static void
-do_str2flag(v8_state vm, int argc, v8_val argv) {
-    char *mode = v8dl->to_string(vm, 1, argv);
+static v8_val
+do_str2flag(v8_state vm, int argc, v8_val argv[]) {
+    char *mode = V8_TOSTR(argv[0]);
     int ret = -1;
     if (! mode || ! mode[0]) {
         goto finish;
@@ -178,12 +178,12 @@ do_str2flag(v8_state vm, int argc, v8_val argv) {
         break;
     }
 finish:
-    v8dl->from_int(vm, ret, argv);
+    return V8_INT32(ret);
 }
 
 
 static v8_ffn ff_table[] = {
-    {1, do_str2flag, "str2flag", 0},
+    {1, do_str2flag, "str2flag", V8_CFUNC},
     {0, do_readfile, "readfile_a", V8_DLCORO},
     {0, do_open, "open_a", V8_DLCORO},
     {0, do_pread, "pread_a", V8_DLCORO},
@@ -193,7 +193,7 @@ static v8_ffn ff_table[] = {
     {0},
 };
 
-int JS_LOAD(v8_state vm, v8_handle hlib) {
+int JS_LOAD(v8_state vm, v8_val hlib) {
     JS_EXPORT(ff_table);
 }
 

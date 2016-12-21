@@ -66,7 +66,6 @@ static ArrayBufferAllocator allocator;
 static Isolate::CreateParams create_params;
 
 extern "C" {
-
 #include "jsv8.h"
 #define V8_BINDING
 #include "jsv8dlfn.h"
@@ -78,34 +77,32 @@ fprintf(stderr, format , ## args);
 #define DPRINT(format, args...) /* nothing */
 #endif
 
+static v8_val global_;
+static v8_val null_;
+static v8_val nullptr_;
+
+static void v8_to_ctype(v8_state vm, v8Value v, v8_val *ctval);
+static v8Value ctype_to_v8(v8_state vm, v8_val *ctval);
+static v8_val ctype_handle(v8_handle h);
+static void v8_reset(v8_state vm, v8_val val);
+
 static int SetFinalizer(v8_state vm, v8Object ptrObj, Fnfree free_func);
 
-static v8_handle ToPersister(js_vm *vm, v8Value value);
-static void DeletePersister(js_vm *vm, v8_handle h);
+static inline void DeletePersister(v8_state vm, v8_handle h) {
+    if (h > NUM_PERMANENT_HANDLES)
+        vm->store_->Dispose(h);
+}
 
 /* val _should_ not be null, undef, $global or $nullptr. */
 #define NewPersister(vm, val)   (vm)->store_->Set(val)
 
 #define GetValueFromPersister(vm, h)    (vm)->store_->Get(h)
 
-void v8_set_errstr(js_vm *vm, const char *str) {
-    if (vm->errstr) {
-        free((void *) vm->errstr);
-        vm->errstr = nullptr;
-    }
-    if (str)
-        vm->errstr = estrdup(str, strlen(str));
-}
-
-static void SetError(js_vm *vm, TryCatch *try_catch) {
-    v8_set_errstr(vm, GetExceptionString(vm->isolate, try_catch));
-}
-
 static void Panic(const char *errstr) {
     fprintf(stderr, "%s\n", errstr);
+    abort();
     exit(1);
 }
-
 
 ////////////////////////////////// Coroutine //////////////////////////////////
 #define GOROUTINE_INTERNAL_FIELD_COUNT 5
@@ -124,13 +121,13 @@ struct GoCallback {
 };
 
 struct Go_s {
-    js_vm *vm;
+    v8_state vm;
     Fngo fp;
     void *inp;
-    v8_handle h;
+    v8_val crval;
 };
 
-static v8Object NewGo(js_vm *vm, void *fptr) {
+static v8Object NewGo(v8_state vm, void *fptr) {
     Isolate *isolate = vm->isolate;
     EscapableHandleScope handle_scope(isolate);
     v8ObjectTemplate templ = v8ObjectTemplate::New(isolate, vm->go_template);
@@ -154,7 +151,7 @@ static v8Object ToGo(v8Value v) {
     return v8Object();  // Empty handle
 }
 
-static v8Object CloneGo(js_vm *vm, v8Object cr1) {
+static v8Object CloneGo(v8_state vm, v8Object cr1) {
     Isolate *isolate = vm->isolate;
     v8Context context = isolate->GetCurrentContext();
     EscapableHandleScope handle_scope(isolate);
@@ -179,12 +176,12 @@ coroutine static void start_go(mill_pipe inq) {
         Go_s *g = *((Go_s **) mill_piperecv(inq, &done));
         if (done)
             break;
-        go(g->fp(g->vm, g->h, g->inp));
+        go(g->fp(g->vm, g->crval, g->inp));
     }
 }
 
 // Receive coroutine callbacks from the main thread.
-coroutine static void recv_go(js_vm *vm) {
+coroutine static void recv_go(v8_state vm) {
     while (true) {
         int done;
         GoCallback *cb = *((GoCallback **) mill_piperecv(vm->outq, &done));
@@ -198,7 +195,7 @@ coroutine static void recv_go(js_vm *vm) {
     }
 }
 
-static void send_go(js_vm *vm, Go_s *g) {
+static void send_go(v8_state vm, Go_s *g) {
     int rc = mill_pipesend(vm->inq, (void *) &g);
     if (rc == -1) {
         fprintf(stderr, "v8binding.c: send_go() failed\n");
@@ -209,7 +206,7 @@ static void send_go(js_vm *vm, Go_s *g) {
 // $go(coro, input [, function(data) { .. }])
 static void Go(const FunctionCallbackInfo<Value>& args) {
     Go_s *g;
-    js_vm *vm;
+    v8_state vm;
     Isolate *isolate;
 
     if (true) { // start V8 scope
@@ -256,9 +253,7 @@ static void Go(const FunctionCallbackInfo<Value>& args) {
 
     cr->SetAlignedPointerInInternalField(1, g); // overwrite field #1
 
-    g->h = NewPersister(vm, cr);
-
-    assert(g->h);
+    g->crval = ctype_handle(NewPersister(vm, cr));
 
     }   // end V8 scope
 
@@ -294,7 +289,7 @@ static inline void RejectGo(Isolate *isolate, v8Object cr, v8Value val) {
     isolate->RunMicrotasks();
 }
 
-static bool RunGoCallback(js_vm *vm, GoCallback *cb) {
+static bool RunGoCallback(v8_state vm, GoCallback *cb) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate)
     // GetCurrentContext() is NULL if called from WaitFor().
@@ -310,7 +305,7 @@ static bool RunGoCallback(js_vm *vm, GoCallback *cb) {
     if (cb->flags & GoReject) {
         char *message = reinterpret_cast<char *>(cb->data);
         RejectGo(isolate, cr,
-                Exception::Error(V8_STR(isolate, message)));
+                Exception::Error(v8STR(isolate, message)));
         free(cb->data);
         return FinishGo(vm, cr, cb);
     }
@@ -324,9 +319,9 @@ static bool RunGoCallback(js_vm *vm, GoCallback *cb) {
         if (cb->flags & GoPull) {
             /* "Pull" stream */
             v8Object robj = Object::New(isolate);
-            robj->Set(context, V8_STR(isolate, "done"),
+            robj->Set(context, v8STR(isolate, "done"),
                     Boolean::New(isolate, cb->flags & GoDone));
-            robj->Set(context, V8_STR(isolate, "value"), ptrObj);
+            robj->Set(context, v8STR(isolate, "value"), ptrObj);
             ResolveGo(isolate, cr, robj);
         } else
             ResolveGo(isolate, cr, ptrObj);
@@ -346,12 +341,13 @@ static bool RunGoCallback(js_vm *vm, GoCallback *cb) {
     args[1] = Boolean::New(isolate, done);
 
     assert(!try_catch.HasCaught());
-    v8Value result = v8Function::Cast(callback)->Call(context->Global(), 2, args);
+    v8Value result = v8Function::Cast(callback)
+                        ->Call(context->Global(), 2, args);
 
     if (done) {
         if (try_catch.HasCaught()) {
             RejectGo(isolate, cr, Exception::Error(
-                    V8_STR(isolate, GetExceptionString(isolate, &try_catch))));
+                    v8STR(isolate, GetExceptionString(isolate, &try_catch))));
         } else {
             /* Using final return from the callback as the settled value */
             ResolveGo(isolate, cr, result);
@@ -359,12 +355,12 @@ static bool RunGoCallback(js_vm *vm, GoCallback *cb) {
         return FinishGo(vm, cr, cb);
     }
 
-    /* swallow any thrown exception */
+    /* swallow intermediate exceptions XXX ??  */
     delete cb;
     return false;
 }
 
-static void WaitFor(js_vm *vm) {
+static void WaitFor(v8_state vm) {
     while (vm->ncoro > 0) {
         /*DPRINT("[[ WaitFor: %d unfinished coroutines. ]]\n", vm->ncoro);*/
         GoCallback *cb = chr(vm->ch, GoCallback *);
@@ -373,7 +369,7 @@ static void WaitFor(js_vm *vm) {
     }
 }
 
-static void MakeGoTemplate(js_vm *vm) {
+static void MakeGoTemplate(v8_state vm) {
     Isolate *isolate = vm->isolate;
     HandleScope handle_scope(isolate);
     v8ObjectTemplate templ = ObjectTemplate::New(isolate);
@@ -381,19 +377,21 @@ static void MakeGoTemplate(js_vm *vm) {
     vm->go_template.Reset(isolate, templ);
 }
 
-v8_handle v8_go(js_vm *vm, Fngo fptr) {
+static v8_val v8_go(v8_state vm, Fngo fptr) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate)
     v8Context context = v8Context::New(isolate, vm->context);
     Context::Scope context_scope(context);
     v8Value gObj = NewGo(vm, reinterpret_cast<void *>(fptr));
-    return ToPersister(vm, gObj);
+    return ctype_handle(NewPersister(vm, gObj));
 }
 
-int v8_goresolve(js_vm *vm, v8_handle hcr,
+static int v8_goresolve(v8_state vm, v8_val crval,
         volatile void *data, int dalen, int done) {
+    if (crval.type != V8_CTYPE_HANDLE)
+        Panic("goresolve: argument #2 is not a goroutine");
     GoCallback *cb = new GoCallback;
-    cb->h = hcr;    // Delay validating handle to avoid lock contention.
+    cb->h = crval.hndle;    // Delay validating handle to avoid lock contention.
     cb->data = const_cast<void *>(data);
     cb->datalen = dalen;
     cb->flags = (GoResolve|done);
@@ -403,9 +401,11 @@ int v8_goresolve(js_vm *vm, v8_handle hcr,
     return (rc == 0);
 }
 
-int v8_goreject(js_vm *vm, v8_handle hcr, const char *message) {
+static int v8_goreject(v8_state vm, v8_val crval, const char *message) {
+    if (crval.type != V8_CTYPE_HANDLE)
+        Panic("goreject: argument #2 is not a goroutine");
     GoCallback *cb = new GoCallback;
-    cb->h = hcr;    // Delay validating handle to avoid lock contention.
+    cb->h = crval.hndle;    // Delay validating handle to avoid lock contention.
     cb->data = reinterpret_cast<void *>(estrdup(message, strlen(message)));
     cb->datalen = 0;
     cb->flags = GoReject;
@@ -416,7 +416,7 @@ int v8_goreject(js_vm *vm, v8_handle hcr, const char *message) {
 
 ///////////////////////////////////End Coroutine////////////////////////////////
 
-static v8Object WrapFunc(js_vm *vm, v8_ffn *func_item) {
+static v8Object WrapFunc(v8_state vm, v8_ffn *func_item) {
     Isolate *isolate = vm->isolate;
     EscapableHandleScope scope(isolate);
     v8ObjectTemplate templ =
@@ -470,7 +470,7 @@ static void Now(const FunctionCallbackInfo<Value>& args) {
 static void Close(const FunctionCallbackInfo<Value>& args) {
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
-    js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
+    v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
     mill_pipeclose(vm->inq);
 }
 
@@ -555,7 +555,7 @@ static void StrError(const v8::FunctionCallbackInfo<v8::Value>& args) {
         errnum = args[0]->Int32Value(context).FromJust();
     else
         errnum = errno;
-    args.GetReturnValue().Set(V8_STR(isolate, strerror(errnum)));
+    args.GetReturnValue().Set(v8STR(isolate, strerror(errnum)));
 }
 
 static void ByteLength(const v8::FunctionCallbackInfo<v8::Value>& args) {
@@ -589,7 +589,7 @@ static void CallForeignFunc(
 
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
-    js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
+    v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
 
     v8Object obj = args.Holder();
     assert(obj->InternalFieldCount() == 2);
@@ -599,40 +599,28 @@ static void CallForeignFunc(
     if (argc > MAXARGS || argc != func_wrap->pcount)
         ThrowError(isolate, "C-function called with incorrect # of arguments");
 
-    if ((func_wrap->flags & V8_DLFUNC)) {
-        assert(vm->dlstr_idx == 0);
-        v8Value argv[MAXARGS+1];
-        // N.B.: argv[0] is for the return value
-        for (int i = 0; i < argc; i++)
-            argv[i + 1] = args[i];
-        argv[0] = v8::Undefined(isolate);   // Default return type is void.
+    assert(func_wrap->flags & V8_CFUNC);
 
-        v8_set_errstr(vm, nullptr);
-        ((Fndlfnwrap) func_wrap->fp)(vm, argc, reinterpret_cast<v8_val>(argv));
-
-        while (vm->dlstr_idx > 0) {
-            free(vm->dlstr[--vm->dlstr_idx]);
-        }
-        if (vm->errstr)
-            ThrowError(isolate, vm->errstr);
-        args.GetReturnValue().Set(argv[0]);
-    } else {
-        v8_handle argh[MAXARGS+1];
-        for (int i = 0; i < argc; i++)
-            argh[i+1] = ToPersister(vm, args[i]);
-        argh[0] = vm->undef_handle;
-        // XXX: use v8_set_errstr() and return 0 in case of error.
-        argh[0] = ((Fnfnwrap) func_wrap->fp)(vm, argc, argh);
-        v8Value retv = v8Value();
-        if (argh[0]) {
-            retv = GetValueFromPersister(vm, argh[0]);
-        }
-        for (int i = 0; i <= argc; i++)
-            DeletePersister(vm, argh[i]);
-        if (retv.IsEmpty())
-            ThrowError(isolate, (vm->errstr ? vm->errstr : "unknown error"));
-        args.GetReturnValue().Set(retv);
+    v8_val ctvals[MAXARGS];
+    for (int i = 0; i < argc; i++) {
+        v8_to_ctype(vm, args[i], &ctvals[i]);
     }
+
+    v8_val retval;
+    {
+        isolate->Exit();
+        v8::Unlocker unlocker(isolate);
+        retval = ((FnCtype) func_wrap->fp)(vm, argc, ctvals);
+    }
+    isolate->Enter();
+    for (int i = 0; i < argc; i++) {
+        v8_reset(vm, ctvals[i]);
+    }
+    v8Value retv = ctype_to_v8(vm, &retval);
+    if (retv.IsEmpty()) // invalid persistent handle
+        Panic("received invalid return value from C-function");
+    args.GetReturnValue().Set(retv);
+    v8_reset(vm, retval);
 }
 
 // TODO: use pthread_once
@@ -643,14 +631,6 @@ static void v8init(void) {
         return;
     // N.B.: V8BINDIR must have a trailing slash!
     V8::InitializeExternalStartupData(V8BINDIR);
-
-#if 0
-#ifdef V8TEST
-    // Enable garbage collection
-    const char* flags = "--expose_gc";
-    V8::SetFlagsFromString(flags, strlen(flags));
-#endif
-#endif
 
 #if defined V8TEST
     // Enable garbage collection
@@ -665,12 +645,18 @@ static void v8init(void) {
     V8::InitializePlatform(platform);
     V8::Initialize();
     create_params.array_buffer_allocator = &allocator;
+    global_ = ctype_handle(GLOBAL_HANDLE);
+    null_ = ctype_handle(NULL_HANDLE);
+    nullptr_.type = V8_CTYPE_PTR;
+    nullptr_.hndle = NULLPTR_HANDLE;
+    nullptr_.ptr = NULL;
+
     v8initialized = 1;
 }
 
 // Invoked by the main thread.
-js_vm *js8_vmnew(mill_worker w) {
-    js_vm *vm = new js_vm;
+v8_state js8_vmnew(mill_worker w) {
+    v8_state vm = new js_vm;
     vm->w = w;
     vm->inq = mill_pipemake(sizeof (void *));
     assert(vm->inq);
@@ -679,7 +665,6 @@ js_vm *js8_vmnew(mill_worker w) {
     vm->ch = mill_chmake(sizeof (GoCallback *), 64); // XXX: How to select a bufsize??
     assert(vm->ch);
     vm->ncoro = 0;
-    vm->errstr = nullptr;
     go(start_go(vm->inq));
     return vm;
 }
@@ -704,7 +689,7 @@ static void GlobalSet(v8Name name, v8Value val,
 }
 
 // Invoked by the main thread.
-void js8_vmclose(js_vm *vm) {
+void js8_vmclose(v8_state vm) {
     //
     // vm->inq already closed (See js_vmclose()).
     // Close vm->outq; This causes the receiving coroutine (recv_coro)
@@ -717,124 +702,116 @@ void js8_vmclose(js_vm *vm) {
 
         mill_pipeclose(vm->outq);
         mill_pipefree(vm->inq);
-
-        if (vm->errstr)
-            free(vm->errstr);
     }
 
     isolate->Dispose();
     delete vm;
 }
 
-static v8_handle ToPersister(js_vm *vm, v8Value val) {
-    if (val->IsUndefined())
-        return vm->undef_handle;
-    if (val->IsNull())
-        return vm->null_handle;
-    return NewPersister(vm, val);
+static v8_val ctype_set_error(Isolate *isolate, TryCatch *try_catch) {
+    v8_val errval;
+    errval.type = V8_CTYPE_ERR;
+    errval.stp = GetExceptionString(isolate, try_catch);
+    return errval;
 }
 
-static void DeletePersister(js_vm *vm, v8_handle h) {
-    if (h > NUM_PERMANENT_HANDLES)
-        vm->store_->Dispose(h);
-}
-
-static v8_handle CompileRun(js_vm *vm, const char *src) {
+static v8Value CompileRun(v8_state vm, const char *src, v8_val *errval) {
     Isolate *isolate = vm->isolate;
-    LOCK_SCOPE(isolate)
+    /* Locker locker(isolate);
+    Isolate::Scope isolate_scope(isolate); */
+    EscapableHandleScope handle_scope(isolate);
 
     v8Context context = v8Context::New(isolate, vm->context);
     Context::Scope context_scope(context);
 
     TryCatch try_catch(isolate);
     const char *script_name = "<string>";   // TODO: optional argument
-    v8String name(V8_STR(isolate, script_name));
-    v8String source(V8_STR(isolate, src));
+    v8String name(v8STR(isolate, script_name));
+    v8String source(v8STR(isolate, src));
 
     ScriptOrigin origin(name);
     v8Script script;
     if (!Script::Compile(context, source, &origin).ToLocal(&script)) {
-        SetError(vm, &try_catch);
-        return 0;
+        *errval = ctype_set_error(isolate, &try_catch);
+        return v8Value();
     }
 
     Handle<Value> result;
     if (!script->Run(context).ToLocal(&result)) {
-        SetError(vm, &try_catch);
-        return 0;
+        *errval = ctype_set_error(isolate, &try_catch);
+        return v8Value();
     }
     assert(!result.IsEmpty());
-    return ToPersister(vm, result);
+    return handle_scope.Escape(result);
 }
 
-static v8_handle CallFunc(struct js8_cmd_s *cmd) {
-    js_vm *vm = cmd->vm;
+static v8_val CallFunc(struct js8_cmd_s *cmd) {
+    v8_state vm = cmd->vm;
     Isolate *isolate = vm->isolate;
-    LOCK_SCOPE(isolate)
+    Locker locker(isolate);
+    Isolate::Scope isolate_scope(isolate);
+    HandleScope handle_scope(isolate);
+
     v8Context context = v8Context::New(isolate, vm->context);
     Context::Scope context_scope(context);
 
     v8Value v1;
+    v8_val ret;
     if (cmd->type == V8CALLSTR) {
         // function expression
-        assert(cmd->source);
-        v8_handle result = CompileRun(vm, cmd->source);
-        if (!result)
-            return 0;
-        v1 = GetValueFromPersister(vm, result);
-        DeletePersister(vm, result);
-    } else
-        v1 = GetValueFromPersister(vm, cmd->h1);
-
-    if (v1.IsEmpty() || !v1->IsFunction()) {
-        v8_set_errstr(vm, "js_call: function argument #1 expected");
-        return 0;
+        v1 = CompileRun(vm, cmd->h1.stp, &ret);
+        if (v1.IsEmpty())
+            return ret;
+    } else {
+        v1 = ctype_to_v8(vm, &cmd->h1);
     }
+    if (v1.IsEmpty() || !v1->IsFunction())
+        Panic("v8_call: function argument #1 expected");
     v8Function func = v8Function::Cast(v1);
 
     int argc = cmd->nargs;
     assert(argc <= 4);
 
     TryCatch try_catch(isolate);
-    v8Object self = context->Global();
-    if (cmd->h) {
-        v8Value v = GetValueFromPersister(vm, cmd->h);
-        if (v.IsEmpty()) {
-            v8_set_errstr(vm, "js_call: invalid handle");
-            return 0;
-        }
-        self = v->ToObject(context).ToLocalChecked();
-    }
+    v8Value v = ctype_to_v8(vm, &cmd->h2);
+    if (v.IsEmpty())
+        Panic("v8_call: invalid handle for 'this'");
+    v8Object self = v->ToObject(context).ToLocalChecked();
 
     v8Value argv[4];
     int i;
     for (i = 0; i < argc; i++) {
-        argv[i] = GetValueFromPersister(vm, cmd->a[i]);
-        // FIXME -- bail out
-        assert(!argv[i].IsEmpty());
+        argv[i] = ctype_to_v8(vm, &cmd->a[i]);
+        if (argv[i].IsEmpty())
+            Panic("v8_call: invalid handle for argument");
     }
 
     v8Value result = func->Call(
             context, self, argc, argv).FromMaybe(v8Value());
     if (try_catch.HasCaught()) {
-        SetError(vm, &try_catch);
-        return 0;
+        return ctype_set_error(isolate, &try_catch);
     }
-    return ToPersister(vm, result);
+    v8_to_ctype(vm, result, &ret);
+    return ret;
 }
 
 int js8_do(struct js8_cmd_s *cmd) {
     switch (cmd->type) {
-    case V8COMPILERUN:
-        assert(cmd->vm->ncoro == 0);
-        cmd->h = CompileRun(cmd->vm, cmd->source);
-        if (cmd->h)
-            WaitFor(cmd->vm);
+    case V8COMPILERUN: {
+        Isolate *isolate = cmd->vm->isolate;
+        LOCK_SCOPE(isolate)
+        v8Value retv = CompileRun(cmd->vm, cmd->h1.stp, &cmd->h2);
+        if (retv.IsEmpty()) {
+            break;
+        }
+        v8_to_ctype(cmd->vm, retv, &cmd->h2);
+    } // release locker
+        WaitFor(cmd->vm);
         break;
     case V8CALL:
     case V8CALLSTR:
-        cmd->h = CallFunc(cmd);
-        if (cmd->h)
+        cmd->h2 = CallFunc(cmd);
+        if (!V8_ISERROR(cmd->h2))
             WaitFor(cmd->vm);
         break;
     case V8GC:
@@ -846,7 +823,7 @@ int js8_do(struct js8_cmd_s *cmd) {
         cmd->vm->weak_counter = 0;
         isolate->RequestGarbageCollectionForTesting(
                             Isolate::kFullGarbageCollection);
-        cmd->weak_counter = cmd->vm->weak_counter;
+        V8_INT32(cmd->h2, cmd->vm->weak_counter);
     }
 #endif
         break;
@@ -858,248 +835,100 @@ int js8_do(struct js8_cmd_s *cmd) {
 }
 
 
-////////////////////////////// DLL ///////////////////////////
-#define ARGV reinterpret_cast<v8Value *>(argv)[arg_num]
-#define ISOLATE(vm)   (vm->isolate)
-#define CURR_CONTEXT(vm)   ISOLATE(vm)->GetCurrentContext()
-#define CHECK_NUMBER(vm, v) \
-    v8Value v = ARGV; \
-    if (! v->IsNumber() && ! v->IsBoolean()) {\
-        v8_set_errstr(vm, "C-type argument is not a number");\
-        return 0;\
-    }
+////////////////////////////// C-type ///////////////////////////
 
-// N.B.: There is no type coercion in any of these JS to C
-// conversion routines.
-static int to_int(js_vm *vm, int arg_num, v8_val argv) {
-    CHECK_NUMBER(vm, v)
-    return v->Int32Value(CURR_CONTEXT(vm)).FromJust();
+static void v8_panic(const char *msg, const char *funcname) {
+    fprintf(stderr, "Panic:%s:%s\n", funcname, msg);
+    abort();
+    exit(1);
 }
 
-static unsigned int to_uint(js_vm *vm, int arg_num, v8_val argv) {
-    CHECK_NUMBER(vm, v)
-    return v->Uint32Value(CURR_CONTEXT(vm)).FromJust();
+static v8_val ctype_handle(v8_handle h) {
+    v8_val ctval;
+    ctval.type = V8_CTYPE_HANDLE;
+    ctval.hndle = h;
+    return ctval;
 }
 
-static int64_t to_long(js_vm *vm, int arg_num, v8_val argv) {
-    v8Value v = ARGV;
-    long64 i;
-    if (LongValue(v, &i))
-        return i.val.i64;
-    if (! v->IsNumber() && ! v->IsBoolean()) {
-        v8_set_errstr(vm, "C-type argument is not a number");
-        return 0;
-    }
-    return v->IntegerValue(CURR_CONTEXT(vm)).FromJust();
+static v8_val v8_ctypestr(const char *stp, unsigned stlen) {
+    v8_val ctval;
+    ctval.type = V8_CTYPE_STR;
+    if (!stp)
+        stlen = 0; /* empty string ! */
+    ctval.stp = (char *) emalloc(stlen+1);
+    memcpy(ctval.stp, stp, stlen);
+    ctval.stp[stlen] = '\0';
+    return ctval;
 }
 
-static uint64_t to_ulong(js_vm *vm, int arg_num, v8_val argv) {
-    v8Value v = ARGV;
-    long64 i;
-    if (LongValue(v, &i))
-        return i.val.u64;
-    if (! v->IsNumber() && ! v->IsBoolean()) {
-        v8_set_errstr(vm, "C-type argument is not a number");
-        return 0;
-    }
-    double d = v->NumberValue(CURR_CONTEXT(vm)).FromJust();
-    if (isfinite(d))
-        return (uint64_t) d;
-    return 0;
-}
+static void v8_to_ctype(v8_state vm, v8Value v, v8_val *ctval) {
+    long64 l;
 
-static double to_double(js_vm *vm, int arg_num, v8_val argv) {
-    CHECK_NUMBER(vm, v)
-    return v->NumberValue(CURR_CONTEXT(vm)).FromJust();
-}
-
-// string, pointer or arraybuffer(view) argument
-static char *to_string(js_vm *vm, int arg_num, v8_val argv) {
-    v8Value v = ARGV;
-    if (!v->IsString()) {
-        if (GetObjectId(vm, v) == V8EXTPTR) {
-            return (char *) v8External::Cast(
-                    v8Object::Cast(v)->GetInternalField(1))->Value();
-        }
-        if (v->IsArrayBuffer()) {
-            return (char *) v8ArrayBuffer::Cast(v)->GetContents().Data();
-        }
-        if (v->IsArrayBufferView()) {
-            v8ArrayBufferView av = v8ArrayBufferView::Cast(v);
-            return (char *)av->Buffer()->GetContents().Data() +
-                        av->ByteOffset();
-        }
-
-        v8_set_errstr(vm, "C-type argument is not a string");
-        return nullptr;
-    }
-    v8String s = v->ToString(CURR_CONTEXT(vm)).ToLocalChecked();
-    int utf8len = s->Utf8Length();	/* >= 0 */
-    char *p = (char *) emalloc(utf8len + 1);
-    int l = s->WriteUtf8(p, utf8len);
-    p[l] = '\0';
-    /* Keep track of memory so can free upon return; See CallForeignFunc() */
-    vm->dlstr[vm->dlstr_idx++] = p;
-    return p;
-}
-
-static void *to_pointer(js_vm *vm, int arg_num, v8_val argv) {
-    if(!argv)   // Super Kludge: see WeakPtrCallback2()
-        return vm->gcptr;
-
-    v8Value v = ARGV;
-    if (GetObjectId(vm, v) != V8EXTPTR) {
-        v8_set_errstr(vm, "C-type argument is not a pointer");
-        return nullptr;
-    }
-    return v8External::Cast(
+    if (v->IsNumber()) {
+        ctval->type = V8_CTYPE_DOUBLE;
+        ctval->d = Local<Number>::Cast(v)->Value();
+    } else if (v->IsString()) {
+        ctval->type = V8_CTYPE_STR;
+        v8String s = v8String::Cast(v);
+        int utf8len = s->Utf8Length();	/* >= 0 */
+        char *p = (char *) emalloc(utf8len + 1);
+        int len = s->WriteUtf8(p, utf8len);
+        p[len] = '\0';
+        ctval->stp = p;
+    } else if (GetObjectId(vm, v) == V8EXTPTR) {
+        // XXX: optimize: check nullptr?
+        ctval->type = V8_CTYPE_PTR;
+        ctval->hndle = NewPersister(vm, v);
+        ctval->ptr = v8External::Cast(
                 v8Object::Cast(v)->GetInternalField(1))->Value();
-}
-
-static v8_handle to_handle(js_vm *vm, int arg_num, v8_val argv) {
-    return ToPersister(vm, ARGV);
-}
-
-#define RETVAL reinterpret_cast<v8Value *>(argv)[0]
-
-static void from_int(js_vm *vm, int i, v8_val argv) {
-    RETVAL = Integer::New(ISOLATE(vm), i);
-}
-
-static void from_uint(js_vm *vm, unsigned ui, v8_val argv) {
-    RETVAL = Integer::NewFromUnsigned(ISOLATE(vm), ui);
-}
-
-static void from_long(js_vm *vm, int64_t i, v8_val argv) {
-    RETVAL = Int64(vm, i);
-}
-
-static void from_ulong(js_vm *vm, uint64_t ui, v8_val argv) {
-    RETVAL = UInt64(vm, ui);
-}
-
-static void from_double(js_vm *vm, double d, v8_val argv) {
-    RETVAL = Number::New(ISOLATE(vm), d);
-}
-
-static void from_pointer(js_vm *vm, void *ptr, v8_val argv) {
-    if (!ptr)
-        RETVAL = GetValueFromPersister(vm, vm->nullptr_handle);
-    else
-        RETVAL = WrapPtr(vm, ptr);
-}
-
-static void from_handle(js_vm *vm, v8_handle h, v8_val argv) {
-    v8Value v = GetValueFromPersister(vm, h);
-    if (!v.IsEmpty())
-        RETVAL = v;
-    else
-        v8_set_errstr(vm, "invalid handle");
-}
-
-static struct v8_dlfn_s v8dlfns = {
-    to_int,
-    to_uint,
-    to_long,
-    to_ulong,
-    to_double,
-    to_string,
-    to_pointer,
-    from_int,
-    from_uint,
-    from_long,
-    from_ulong,
-    from_double,
-    from_pointer,
-    v8_errstr,
-};
-
-static struct v8_fn_s v8fns = {
-    to_handle,
-    from_handle,
-    v8_number,
-    v8_tonumber,
-    v8_int32,
-    v8_toint32,
-    v8_string,
-    v8_tostring,
-    v8_object,
-    v8_get,
-    v8_set,
-    v8_geti,
-    v8_seti,
-    v8_array,
-    v8_reset,
-    v8_dispose,
-    v8_global,
-    v8_null,
-    v8_go,
-    v8_goresolve,
-    v8_goreject,
-    v8_errstr,
-    v8_callstr,
-};
-
-typedef int (*Fnload)(js_vm *, v8_handle, v8_dlfn_s *const, v8_fn_s *const, v8_ffn **);
-
-// $load - load a dynamic library.
-// The filename must contain a slash. Any path search should be
-// done in the JS.
-
-static void Load(const FunctionCallbackInfo<Value>& args) {
-    Isolate *isolate = args.GetIsolate();
-    HandleScope handle_scope(isolate);
-    js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
-
-    int argc = args.Length();
-    ThrowNotEnoughArgs(isolate, argc < 1);
-    v8Context context = isolate->GetCurrentContext();
-    String::Utf8Value path(args[0]);
-    if (!*path) {
-        ThrowError(isolate, "$load: path is empty string");
-    }
-    if (!strchr(*path, '/')) {
-        args.GetReturnValue().Set(v8::Null(isolate));
-        return;
-    }
-    dlerror();  /* Clear any existing error */
-    void *dl = dlopen(*path, RTLD_LAZY);
-    if (!dl) {
-        ThrowError(isolate, "$load: cannot dlopen library"); /* FIXME: use  dlerror() */
-    }
-
-    Fnload load_func = (Fnload) dlsym(dl, V8_LOAD_FUNC);
-    if (!load_func) {
-        dlclose(dl);
-        ThrowError(isolate,
-            "$load: cannot find library initialization function");
-    }
-
-    v8_ffn *functab;
-    v8Object o1 = Object::New(isolate);
-    v8_handle h1 = NewPersister(vm, o1);
-    v8_set_errstr(vm, nullptr);
-    int nfunc = load_func(vm, h1, &v8dlfns, &v8fns, &functab);
-    DeletePersister(vm, h1);
-
-    if (nfunc < 0) {
-        dlclose(dl);
-        ThrowError(isolate, vm->errstr ? vm->errstr : "unknown error");
-    }
-    for (int i = 0; i < nfunc && functab[i].name; i++) {
-        v8Object fnObj;
-        if (functab[i].flags & V8_DLCORO) {
-            fnObj = NewGo(vm, functab[i].fp);
+    } else if (v->IsBoolean()) {
+        ctval->type = V8_CTYPE_DOUBLE;
+        ctval->d = (double) Local<Boolean>::Cast(v)->Value();
+    } else if (LongValue(v, &l)) {
+        if (l.issigned) {
+            ctval->type = V8_CTYPE_LONG;
+            ctval->i64 = l.val.i64;
         } else {
-            functab[i].flags |= V8_DLFUNC;
-            fnObj = WrapFunc(vm, &functab[i]);
+            ctval->type = V8_CTYPE_ULONG;
+            ctval->u64 = l.val.u64;
         }
-        o1->Set(context,
-                String::NewFromUtf8(isolate, functab[i].name),
-                fnObj).FromJust();
+    } else if (v->IsNull()) {
+        *ctval = null_;
+    } else if (!v->IsUndefined()) {
+        ctval->type = V8_CTYPE_HANDLE;
+        ctval->hndle = NewPersister(vm, v);
+    } else {
+        /* undefined */
+        ctval->type = V8_CTYPE_VOID;
     }
-    args.GetReturnValue().Set(o1);
 }
+
+static v8Value ctype_to_v8(v8_state vm, v8_val *ctval) {
+    switch (ctval->type) {
+    case V8_CTYPE_INT32:
+        return Integer::New(vm->isolate, ctval->i32);
+    case V8_CTYPE_UINT32:
+        return Integer::NewFromUnsigned(vm->isolate, ctval->ui32);
+    case V8_CTYPE_DOUBLE:
+        return Number::New(vm->isolate, ctval->d);
+    case V8_CTYPE_STR:
+        return String::NewFromUtf8(vm->isolate, ctval->stp);
+    case V8_CTYPE_PTR:
+        if (!ctval->ptr)
+            return GetValueFromPersister(vm, NULLPTR_HANDLE);
+        return WrapPtr(vm, ctval->ptr);
+    case V8_CTYPE_LONG:
+        return Int64(vm, ctval->i64);
+    case V8_CTYPE_ULONG:
+        return UInt64(vm, ctval->u64);
+    case V8_CTYPE_HANDLE:
+        return GetValueFromPersister(vm, ctval->hndle); // possibly empty
+    default:
+        break;
+    }
+    return v8::Undefined(vm->isolate);
+}
+
 
 ///////////////////////////////////////////////////////////////
 static void PersistentSet(const v8::FunctionCallbackInfo<v8::Value>& args) {
@@ -1107,8 +936,8 @@ static void PersistentSet(const v8::FunctionCallbackInfo<v8::Value>& args) {
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
     ThrowNotEnoughArgs(isolate, argc < 1);
-    js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
-    unsigned k = ToPersister(vm, args[0]);
+    v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
+    unsigned k = NewPersister(vm, args[0]);
     args.GetReturnValue().Set(Integer::NewFromUnsigned(isolate, k));
 }
 
@@ -1118,7 +947,7 @@ static void PersistentGet(const v8::FunctionCallbackInfo<v8::Value>& args) {
     HandleScope handle_scope(isolate);
     ThrowNotEnoughArgs(isolate, argc < 1);
     unsigned k = args[0]->Uint32Value(isolate->GetCurrentContext()).FromJust();
-    js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
+    v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
     v8Value v = GetValueFromPersister(vm, k);
     if (v.IsEmpty())
         ThrowError(isolate, "get: invalid handle argument");
@@ -1131,30 +960,33 @@ static void PersistentDelete(const v8::FunctionCallbackInfo<v8::Value>& args) {
     HandleScope handle_scope(isolate);
     ThrowNotEnoughArgs(isolate, argc < 1);
     unsigned k = args[0]->Uint32Value(isolate->GetCurrentContext()).FromJust();
-    js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
+    v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
     DeletePersister(vm, k);
 }
 
-static v8Value MakePersistent(Isolate *isolate) {
+// $store.set(), $store.get() and $store.delete()
+static v8Value MakeStore(Isolate *isolate) {
     EscapableHandleScope handle_scope(isolate);
     v8ObjectTemplate templ = ObjectTemplate::New(isolate);
-    templ->Set(V8_STR(isolate, "set"),
+    templ->Set(v8STR(isolate, "set"),
                 FunctionTemplate::New(isolate, PersistentSet));
-    templ->Set(V8_STR(isolate, "get"),
+    templ->Set(v8STR(isolate, "get"),
                 FunctionTemplate::New(isolate, PersistentGet));
-    templ->Set(V8_STR(isolate, "delete"),
+    templ->Set(v8STR(isolate, "delete"),
                 FunctionTemplate::New(isolate, PersistentDelete));
     // Create the one and only instance.
-    v8Object p = templ->NewInstance(isolate->GetCurrentContext()).ToLocalChecked();
+    v8Object p = templ->NewInstance(
+                isolate->GetCurrentContext()).ToLocalChecked();
     return handle_scope.Escape(p);
 }
+
 
 static void CollectGarbage(const v8::FunctionCallbackInfo<v8::Value>& args) {
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
     int rc = 0;
 #ifdef V8TEST
-    js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
+    v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
     vm->weak_counter = 0;
     isolate->RequestGarbageCollectionForTesting(
                             Isolate::kFullGarbageCollection);
@@ -1176,8 +1008,11 @@ void GarbageCollected(Isolate *isolate, GCType type, GCCallbackFlags flags) {
 }
 #endif
 
+
+static void Load(const FunctionCallbackInfo<Value>& args);
+
 // The second part of the vm initialization.
-static void CreateIsolate(js_vm *vm) {
+static void CreateIsolate(v8_state vm) {
     v8init();
     Isolate* isolate = Isolate::New(create_params);
     LOCK_SCOPE(isolate)
@@ -1188,43 +1023,41 @@ static void CreateIsolate(js_vm *vm) {
 
     assert(isolate->GetCurrentContext().IsEmpty());
     vm->isolate = isolate;
-    vm->dlstr_idx = 0;
 
     // isolate->SetCaptureStackTraceForUncaughtExceptions(true);
     isolate->SetData(0, vm);
 
     v8ObjectTemplate global = ObjectTemplate::New(isolate);
 
-    global->Set(V8_STR(isolate, "$print"),
+    global->Set(v8STR(isolate, "$print"),
                 FunctionTemplate::New(isolate, Print));
-    global->Set(V8_STR(isolate, "$go"),
+    global->Set(v8STR(isolate, "$go"),
                 FunctionTemplate::New(isolate, Go));
-    global->Set(V8_STR(isolate, "$now"),
+    global->Set(v8STR(isolate, "$now"),
                 FunctionTemplate::New(isolate, Now));
-    global->Set(V8_STR(isolate, "$close"),
+    global->Set(v8STR(isolate, "$close"),
                 FunctionTemplate::New(isolate, Close));
-    global->Set(V8_STR(isolate, "$eval"),
+    global->Set(v8STR(isolate, "$eval"),
                 FunctionTemplate::New(isolate, EvalString));
-    global->Set(V8_STR(isolate, "$malloc"),
+    global->Set(v8STR(isolate, "$malloc"),
                 FunctionTemplate::New(isolate, Malloc));
-    global->Set(V8_STR(isolate, "$isPointer"),
+    global->Set(v8STR(isolate, "$isPointer"),
                 FunctionTemplate::New(isolate, IsPointer));
-    global->Set(V8_STR(isolate, "$strerror"),
+    global->Set(v8STR(isolate, "$strerror"),
                 FunctionTemplate::New(isolate, StrError));
-    global->Set(V8_STR(isolate, "$length"),
+    global->Set(v8STR(isolate, "$length"),
                 FunctionTemplate::New(isolate, ByteLength));
-    global->Set(V8_STR(isolate, "$load"),
+    global->Set(v8STR(isolate, "$load"),
                 FunctionTemplate::New(isolate, Load));
-    global->Set(V8_STR(isolate, "$collectGarbage"),
+    global->Set(v8STR(isolate, "$collectGarbage"),
                 FunctionTemplate::New(isolate, CollectGarbage));
-    global->Set(V8_STR(isolate, "$lcntl"),
+    global->Set(v8STR(isolate, "$lcntl"),
                 FunctionTemplate::New(isolate, LongCntl));
-    global->Set(V8_STR(isolate, "$long"), LongTemplate(vm));
+    global->Set(v8STR(isolate, "$long"), LongTemplate(vm));
 
     v8Context context = Context::New(isolate, NULL, global);
     if (context.IsEmpty()) {
-        fprintf(stderr, "failed to create a V8 context\n");
-        exit(1);
+        Panic("failed to create a V8 context");
     }
 
     vm->context.Reset(isolate, context);
@@ -1256,13 +1089,15 @@ static void CreateIsolate(js_vm *vm) {
 
     // Create the C function prototype object.
     v8ObjectTemplate templ1 = ObjectTemplate::New(isolate);
-    vm->cfunc_proto.Reset(isolate, templ1->NewInstance(context).ToLocalChecked());
+    vm->cfunc_proto.Reset(isolate,
+                templ1->NewInstance(context).ToLocalChecked());
 
     // Create the long prototype object.
     v8ObjectTemplate templ2 = ObjectTemplate::New(isolate);
-    /* templ2->Set(V8_STR(isolate, "..."),
+    /* templ2->Set(v8STR(isolate, "..."),
                 FunctionTemplate::New(isolate, ...)); */
-    vm->long_proto.Reset(isolate, templ2->NewInstance(context).ToLocalChecked());
+    vm->long_proto.Reset(isolate,
+                templ2->NewInstance(context).ToLocalChecked());
 
     v8Object nullptr_obj = extptr_templ
                 -> NewInstance(context).ToLocalChecked();
@@ -1278,272 +1113,166 @@ static void CreateIsolate(js_vm *vm) {
     // Name the global object "Global".
     v8Object realGlobal = v8Object::Cast(
                         context->Global()->GetPrototype());
-    realGlobal->Set(V8_STR(isolate, "Global"), realGlobal);
-    realGlobal->Set(V8_STR(isolate, "$nullptr"), nullptr_obj);
-    realGlobal->Set(V8_STR(isolate, "$store"), MakePersistent(isolate));
+    realGlobal->Set(v8STR(isolate, "Global"), realGlobal);
+    realGlobal->Set(v8STR(isolate, "$nullptr"), nullptr_obj);
+    realGlobal->Set(v8STR(isolate, "$store"), MakeStore(isolate));
 
-    realGlobal->SetAccessor(context, V8_STR(isolate, "$errno"),
+    realGlobal->SetAccessor(context, v8STR(isolate, "$errno"),
                     GlobalGet, GlobalSet).FromJust();
 
     // Initial size should be some multiple of 32.
     vm->store_ = new PersistentStore(isolate, 1024);
 
-    vm->undef_handle = NewPersister(vm, v8::Undefined(isolate));
-    vm->null_handle = NewPersister(vm, v8::Null(isolate));
-    vm->global_handle = NewPersister(vm, realGlobal);
-    vm->nullptr_handle = NewPersister(vm, nullptr_obj);
-
-    assert(vm->nullptr_handle == NUM_PERMANENT_HANDLES);
+    /* NUM_PERMANENT_HANDLES == 3*/
+    v8_handle h1;
+    h1 = NewPersister(vm, realGlobal);
+    assert(h1 == GLOBAL_HANDLE);
+    h1 = NewPersister(vm, v8::Null(isolate));
+    assert(h1 == NULL_HANDLE);
+    h1 = NewPersister(vm, nullptr_obj);
+    assert(h1 == NULLPTR_HANDLE);
 }
 
 // Runs in the worker(V8) thread.
-int js8_vminit(js_vm *vm) {
+int js8_vminit(v8_state vm) {
     CreateIsolate(vm);
     go(recv_go(vm));
     return 0;
 }
 
 ////////////////////////////////////////////////////////////////////////
-const char *v8_errstr(v8_state vm) {
-    return vm->errstr;
-}
 
-v8_handle v8_global(v8_state vm) {
-    return vm->global_handle;
-}
-
-v8_handle v8_null(v8_state vm) {
-    return vm->null_handle;
-}
-
-v8_handle v8_number(v8_state vm, double d) {
-    Isolate *isolate = vm->isolate;
-    LOCK_SCOPE(isolate)
-    return NewPersister(vm, Number::New(isolate, d));
-}
-
-double v8_tonumber(v8_state vm, v8_handle h) {
-    Isolate *isolate = vm->isolate;
-    LOCK_SCOPE(isolate)
-    v8Value v = GetValueFromPersister(vm, h);
-    if (v.IsEmpty()) {
-        v8_set_errstr(vm, "v8_tonumber: invalid handle");
-        return 0;
-    }
-    v8Context context = v8Context::New(isolate, vm->context);
-    return v->NumberValue(context).FromJust();
-}
-
-v8_handle v8_int32(v8_state vm, int32_t i) {
-    Isolate *isolate = vm->isolate;
-    LOCK_SCOPE(isolate)
-    return NewPersister(vm, Integer::New(isolate, i));
-}
-
-int32_t v8_toint32(v8_state vm, v8_handle h) {
-    Isolate *isolate = vm->isolate;
-    LOCK_SCOPE(isolate)
-    v8Value v = GetValueFromPersister(vm, h);
-    if (v.IsEmpty()) {
-        v8_set_errstr(vm, "v8_toint32: invalid handle");
-        return 0;
-    }
-    v8Context context = v8Context::New(isolate, vm->context);
-    return v->Int32Value(context).FromJust();
-}
-
-v8_handle v8_string(v8_state vm, const char *stptr, int length) {
-    Isolate *isolate = vm->isolate;
-    LOCK_SCOPE(isolate)
-    assert(stptr);
-    if (length < 0)
-        length = strlen(stptr);
-    return NewPersister(vm, String::NewFromUtf8(isolate, stptr,
-                            v8::String::kNormalString, length));
-}
-
-char *v8_tostring(v8_state vm, v8_handle h) {
-    Isolate *isolate = vm->isolate;
-    LOCK_SCOPE(isolate)
-    v8Value v = GetValueFromPersister(vm, h);
-    if (v.IsEmpty()) {
-        v8_set_errstr(vm, "v8_tostring: invalid handle");
-        return nullptr;
-    }
-    v8Context context = v8Context::New(isolate, vm->context);
-    String::Utf8Value stval(v->ToString(context).ToLocalChecked());
-    /* return empty string if there was an error during conversion. */
-    return estrdup(*stval, stval.length());
-}
-
-v8_handle v8_object(v8_state vm) {
+static v8_val v8_object(v8_state vm) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate)
     /* XXX: need a context in this case unlike String or Number!!! */
     v8Context context = v8Context::New(isolate, vm->context);
     Context::Scope context_scope(context);
-    return NewPersister(vm, Object::New(isolate));
+    return ctype_handle(NewPersister(vm, Object::New(isolate)));
 }
 
-v8_handle v8_get(v8_state vm, v8_handle hobj, const char *key) {
-    Isolate *isolate = vm->isolate;
-    LOCK_SCOPE(isolate)
-    v8Value v1 = GetValueFromPersister(vm, hobj);
-    if (v1.IsEmpty()) {
-        v8_set_errstr(vm, "v8_get: invalid handle");
-        return 0;
-    }
-    if (!v1->IsObject()) {
-        v8_set_errstr(vm, "v8_get: object argument expected");
-        return 0;
-    }
-    v8Object obj = v8Object::Cast(v1);
-    v8Value v2 = obj->Get(v8Context::New(isolate, vm->context),
-                V8_STR(isolate, key)).ToLocalChecked();
-    return ToPersister(vm, v2);
-}
-
-int v8_set(v8_state vm, v8_handle hobj, const char *key, v8_handle hval) {
-    Isolate *isolate = vm->isolate;
-    LOCK_SCOPE(isolate)
-    if (!hval)
-        hval = vm->null_handle;
-    v8Value v1 = GetValueFromPersister(vm, hobj);
-    v8Value v2 = GetValueFromPersister(vm, hval);
-    if (v1.IsEmpty() || v2.IsEmpty()) {
-        v8_set_errstr(vm, "v8_set: invalid handle");
-        return 0;
-    }
-    if (!v1->IsObject()) {
-        v8_set_errstr(vm, "v8_set: object argument expected");
-        return 0;
-    }
-    v8Object obj = v8Object::Cast(v1);
-    return obj->Set(v8Context::New(isolate, vm->context),
-                    V8_STR(isolate, key), v2).FromJust();
-}
-
-v8_handle v8_array(v8_state vm, int length) {
+static v8_val v8_get(v8_state vm, v8_val hobj, const char *key) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate)
     v8Context context = v8Context::New(isolate, vm->context);
     Context::Scope context_scope(context);
-    return NewPersister(vm, Array::New(isolate, length));
+
+    v8Value v1 = ctype_to_v8(vm, &hobj);
+    if (v1.IsEmpty())
+        Panic("get: invalid handle");
+    if (!v1->IsObject()) {
+        //v1 = v1->ToObject(context).ToLocalChecked();
+        Panic("get: not an object");
+    }
+    v8Object obj = v8Object::Cast(v1);
+    v8Value v2 = obj->Get(context,
+                v8STR(isolate, key)).ToLocalChecked();
+    v8_val ctval;
+    v8_to_ctype(vm, v2, &ctval);
+    return ctval;
 }
 
-v8_handle v8_geti(v8_state vm, v8_handle hobj, unsigned index) {
+static int v8_set(v8_state vm, v8_val hobj,
+        const char *key, v8_val ctval) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate)
-    v8Value v1 = GetValueFromPersister(vm, hobj);
-    if (v1.IsEmpty()) {
-        v8_set_errstr(vm, "v8_geti: invalid handle");
-        return 0;
+    v8Context context = v8Context::New(isolate, vm->context);
+    Context::Scope context_scope(context);  /* needed ? */
+
+    v8Value v2 = ctype_to_v8(vm, &ctval);
+    v8Value v1 = ctype_to_v8(vm, &hobj);
+    if (v1.IsEmpty() || v2.IsEmpty())
+        Panic("set: invalid handle");
+    if (!v1->IsObject())
+        Panic("set: not an object");
+    if (!v2->IsUndefined()) {
+        v8Object obj = v8Object::Cast(v1);
+        return obj->Set(context,
+                    v8STR(isolate, key), v2).FromJust();
     }
-    if (!v1->IsObject()) {
-        v8_set_errstr(vm, "v8_geti: object argument expected");
-        return 0;
-    }
+    return 1; // undefined -> do nothing
+}
+
+static v8_val v8_array(v8_state vm, int length) {
+    Isolate *isolate = vm->isolate;
+    LOCK_SCOPE(isolate)
+    v8Context context = v8Context::New(isolate, vm->context);
+    Context::Scope context_scope(context);
+    return ctype_handle(NewPersister(vm, Array::New(isolate, length)));
+}
+
+static v8_val v8_geti(v8_state vm, v8_val hobj, unsigned index) {
+    Isolate *isolate = vm->isolate;
+    LOCK_SCOPE(isolate)
+    v8Value v1 = ctype_to_v8(vm, &hobj);
+    if (v1.IsEmpty())
+        Panic("geti: invalid handle");
+    if (!v1->IsObject())
+        Panic("geti: not an object");
     v8Object obj = v8Object::Cast(v1);
 
     // Undefined for nonexistent index.
     v8Value v2 = obj->Get(v8Context::New(isolate, vm->context),
                         index).ToLocalChecked();
-    return ToPersister(vm, v2);
+    v8_val ctval;
+    v8_to_ctype(vm, v2, &ctval);
+    return ctval;
 }
 
-int v8_seti(v8_state vm, v8_handle hobj, unsigned index, v8_handle hval) {
-    Isolate *isolate = vm->isolate;
-    LOCK_SCOPE(isolate)
-    if (!hval)
-        hval = vm->null_handle;
-    v8Value v1 = GetValueFromPersister(vm, hobj);
-    v8Value v2 = GetValueFromPersister(vm, hval);
-    if (v1.IsEmpty() || v2.IsEmpty()) {
-        v8_set_errstr(vm, "v8_seti: invalid handle");
-        return 0;
-    }
-    if (!v1->IsObject()) {
-        v8_set_errstr(vm, "v8_seti: object argument expected");
-        return 0;
-    }
-    v8Object obj = v8Object::Cast(v1);
-    return obj->Set(v8Context::New(isolate, vm->context),
-                        index, v2).FromJust();
-}
-
-v8_handle v8_pointer(v8_state vm, void *ptr) {
-    if (!ptr)
-        return vm->nullptr_handle;
+static int v8_seti(v8_state vm, v8_val hobj,
+        unsigned index, v8_val ctval) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate)
     v8Context context = v8Context::New(isolate, vm->context);
-    Context::Scope context_scope(context);
-    return NewPersister(vm, WrapPtr(vm, ptr));
-}
+    Context::Scope context_scope(context); /* needed ? */
 
-void *v8_topointer(v8_state vm, v8_handle h) {
-    Isolate *isolate = vm->isolate;
-    LOCK_SCOPE(isolate)
-    v8Value v = GetValueFromPersister(vm, h);
-    if (v.IsEmpty()) {
-        v8_set_errstr(vm, "v8_topointer: invalid handle");
-        return nullptr;
-    }
-    if (v->IsArrayBuffer()) {
-        // The pointer will be invalid if the ArrayBuffer gets
-        // garbage collected!.
-        return v8ArrayBuffer::Cast(v)->GetContents().Data();
-    }
-    if (v->IsArrayBufferView()) {
-        v8ArrayBufferView av = v8ArrayBufferView::Cast(v);
-        return (char *)av->Buffer()->GetContents().Data() +
-                        av->ByteOffset();
-    }
-
-    v8Object obj = ToPtr(v);
-    if (obj.IsEmpty()) {
-        v8_set_errstr(vm, "v8_topointer: pointer argument expected");
-        return nullptr;
-    }
-    // Clear error
-    v8_set_errstr(vm, nullptr);
-    return UnwrapPtr(obj);
+    v8Value v1 = ctype_to_v8(vm, &hobj);
+    v8Value v2 = ctype_to_v8(vm, &ctval);
+    if (v1.IsEmpty() || v2.IsEmpty())
+        Panic("seti: invalid handle");
+    if (!v1->IsObject())
+        Panic("seti: not an object");
+    v8Object obj = v8Object::Cast(v1);
+    if (! v2->IsUndefined())
+        return obj->Set(context, index, v2).FromJust();
+    return 1;   // undefined -> do nothing
 }
 
 // Import a C function.
-v8_handle v8_cfunc(v8_state vm, const v8_ffn *func_item) {
+v8_val v8_cfunc(v8_state vm, const v8_ffn *func_item) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate);
     v8Context context = v8Context::New(isolate, vm->context);
     Context::Scope context_scope(context);
-    ((v8_ffn *) func_item)->flags = 0;
+    ((v8_ffn *) func_item)->flags = V8_CFUNC;
     v8Object fnObj = WrapFunc(vm, (v8_ffn *) func_item);
-    return NewPersister(vm, fnObj);
+    return ctype_handle(NewPersister(vm, fnObj));
 }
+
 
 /* N.B.: V8 owns the Buffer memory. If ptr is not NULL, it must be
  * compatible with ArrayBuffer::Allocator::Free. */
-v8_handle v8_arraybuffer(v8_state vm, void *ptr, size_t byte_length) {
+static v8_val v8_arraybuffer(v8_state vm, void *ptr, size_t byte_length) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate)
     v8Context context = v8Context::New(isolate, vm->context);
     Context::Scope context_scope(context);
     if (ptr) {
-        return NewPersister(vm,
+        return ctype_handle(NewPersister(vm,
                 ArrayBuffer::New(isolate, ptr, byte_length,
-                    v8::ArrayBufferCreationMode::kInternalized));
+                    v8::ArrayBufferCreationMode::kInternalized)));
     }
-    return NewPersister(vm,
-            ArrayBuffer::New(isolate, byte_length));
+    return ctype_handle(NewPersister(vm,
+            ArrayBuffer::New(isolate, byte_length)));
 }
 
-size_t v8_bytelength(v8_state vm, v8_handle hab) {
+static size_t v8_bytelength(v8_state vm, v8_val val) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate)
-    v8Value v1 = GetValueFromPersister(vm, hab);
-    size_t len = 0;
+    v8Value v1 = ctype_to_v8(vm, &val);
     if (v1.IsEmpty())
         return 0;
+    size_t len = 0;
     if (v1->IsArrayBufferView()) {
         /* ArrayBufferView is implemented by all typed arrays and DataView */
         len = v8ArrayBufferView::Cast(v1)->ByteLength();
@@ -1554,10 +1283,10 @@ size_t v8_bytelength(v8_state vm, v8_handle hab) {
     return len;
 }
 
-size_t v8_byteoffset(v8_state vm, v8_handle habv) {
+static size_t v8_byteoffset(v8_state vm, v8_val val) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate)
-    v8Value v1 = GetValueFromPersister(vm, habv);
+    v8Value v1 = ctype_to_v8(vm, &val);
     size_t off = 0;
     if (!v1.IsEmpty() && v1->IsArrayBufferView()) {
         off = v8ArrayBufferView::Cast(v1)->ByteOffset();
@@ -1566,44 +1295,53 @@ size_t v8_byteoffset(v8_state vm, v8_handle habv) {
     return off;
 }
 
-v8_handle v8_getbuffer(v8_state vm, v8_handle h) {
+v8_val v8_getbuffer(v8_state vm, v8_val val) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate)
-    v8Value v1 = GetValueFromPersister(vm, h);
-    if (v1.IsEmpty() || !v1->IsTypedArray()) {
-        v8_set_errstr(vm, "v8_getbuffer: TypedArray argument expected");
-        return 0;
-    }
+    v8Value v1 = ctype_to_v8(vm, &val);
+    if (v1.IsEmpty() || !v1->IsTypedArray())
+        Panic("getbuffer: TypedArray argument expected");
     v8Value ab = v8TypedArray::Cast(v1)->Buffer();
-    return NewPersister(vm, ab);
+    return ctype_handle(NewPersister(vm, ab));
 }
 
-void *v8_externalize(v8_state vm, v8_handle h) {
+void *v8_externalize(v8_state vm, v8_val val) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate);
-    // Clear error.
-    v8_set_errstr(vm, nullptr);
-    v8Value v1 = GetValueFromPersister(vm, h);
+    v8Value v1 = ctype_to_v8(vm, &val);
     if (!v1.IsEmpty() && v1->IsArrayBuffer()) {
         return v8ArrayBuffer::Cast(v1)->Externalize().Data();
     }
-    v8_set_errstr(vm,
-            "v8_externalize: ArrayBuffer argument expected");
+    Panic("externalize: ArrayBuffer argument expected");
     return nullptr;
 }
 
-void v8_reset(js_vm *vm, v8_handle h) {
-    Isolate *isolate = vm->isolate;
-    LOCK_SCOPE(isolate)
-    DeletePersister(vm, h);
+static void v8_reset(v8_state vm, v8_val val) {
+    switch (val.type) {
+    case V8_CTYPE_STR:
+        val.type = 0;
+        free(val.stp);
+        val.stp = NULL;
+        break;
+    case V8_CTYPE_PTR:
+    case V8_CTYPE_HANDLE:
+        if (val.hndle > NUM_PERMANENT_HANDLES) {
+            Isolate *isolate = vm->isolate;
+            Locker locker(isolate);
+            Isolate::Scope isolate_scope(isolate);
+            vm->store_->Dispose(val.hndle);
+            val.type = 0;
+            val.hndle = 0;
+        }
+        break;
+    }
 }
 
 struct WeakPtr {
     v8_state vm;
     union {
         Fnfree free_func;
-        /*v8_handle (*free_extwrap)(v8_state , int, v8_handle[]); -- FIXME */
-        void (*free_dlwrap)(v8_state , int, void *argv);
+        FnCtype free_ctfunc;
     };
     Persistent<Value> handle;
     void *ptr;
@@ -1623,17 +1361,16 @@ static void WeakPtrCallback1(
     delete w;
 }
 
-// DLL function
+// imported C function
 static void WeakPtrCallback2(
         const v8::WeakCallbackInfo<WeakPtr> &data) {
     WeakPtr *w = data.GetParameter();
     Isolate *isolate = w->vm->isolate;
-    HandleScope handle_scope(isolate);
-
-   // Super Kludge: see to_pointer() ..
-    w->vm->gcptr = w->ptr;
-    w->free_dlwrap(w->vm, 0, NULL); // XXX: only case where 3rd arg == NULL
-
+    /* HandleScope handle_scope(isolate); */
+    v8_val ctvals[1];
+    ctvals[0].type = V8_CTYPE_PTR;
+    ctvals[0].ptr = w->ptr;
+    w->free_ctfunc(w->vm, 1, ctvals);   // FIXME -- check return type, should be V8_CTYPE_VOID
     w->handle.Reset();
     isolate->AdjustAmountOfExternalAllocatedMemory(
                 - static_cast<int64_t>(sizeof(WeakPtr)));
@@ -1665,7 +1402,9 @@ static int SetFinalizer(v8_state vm, v8Object ptrObj, Fnfree free_func) {
     return false;
 }
 
-int v8_dispose(v8_state vm, v8_handle h, Fnfree free_func) {
+#if 0
+// XXX: use gc() in JS.
+static int v8_dispose(v8_state vm, v8_handle h, Fnfree free_func) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate)
     v8Object ptrObj = ToPtr(GetValueFromPersister(vm, h));
@@ -1675,6 +1414,7 @@ int v8_dispose(v8_state vm, v8_handle h, Fnfree free_func) {
     }
     return false;
 }
+#endif
 
 /*
  *  ptr.gc() => use free() as the finalizer.
@@ -1706,13 +1446,14 @@ void Gc(const FunctionCallbackInfo<Value>& args) {
                         v8Object::Cast(args[0])->GetInternalField(1)
                     )->Value()
             );
-        if ((func_item->flags & V8_DLFUNC) && func_item->pcount == 1) {
+        if ((func_item->flags & V8_CFUNC) && func_item->pcount == 1) {
             WeakPtr *w = new WeakPtr;
             w->vm = vm;
             w->ptr = ptr;
-            w->free_dlwrap = (Fndlfnwrap) func_item->fp;
+            w->free_ctfunc = (FnCtype) func_item->fp;
             w->handle.Reset(isolate, obj);
-            w->handle.SetWeak(w, WeakPtrCallback2, WeakCallbackType::kParameter);
+            w->handle.SetWeak(w, WeakPtrCallback2,
+                            WeakCallbackType::kParameter);
             SetCtypeWeak(obj);
             w->handle.MarkIndependent();
             isolate->AdjustAmountOfExternalAllocatedMemory(
@@ -1722,6 +1463,101 @@ void Gc(const FunctionCallbackInfo<Value>& args) {
         }
     }
     ThrowError(isolate, "gc: invalid argument");
+}
+
+static const char *v8_ctype_errs[] = {
+    "C-type argument is not a number",
+    "C-type argument is not a string",
+    "C-type argument is not a pointer",
+    "C-type argument is not a long (object)",
+    "C-type argument is not an unsigned long (object)",
+    "invalid handle",
+};
+
+static struct v8_fn_s v8fns = {
+    v8_object,
+    v8_get,
+    v8_set,
+    v8_geti,
+    v8_seti,
+    v8_array,
+    v8_arraybuffer,
+    v8_bytelength,  /* ArrayBuffer(View) */
+    v8_byteoffset, /* ArrayBufferView */
+    v8_reset,
+    v8_go,
+    v8_goresolve,
+    v8_goreject,
+    v8_callstr,
+    &global_,
+    &null_,
+    /* private */
+    v8_ctypestr,
+    v8_panic,
+    v8_ctype_errs,
+};
+
+struct v8_fn_s *jsv8 = &v8fns;
+
+typedef int (*Fnload)(v8_state, v8_val, v8_fn_s *const, v8_ffn **);
+
+// $load - load a dynamic library.
+// The filename must contain a slash. Any path search should be
+// done in the JS.
+
+static void Load(const FunctionCallbackInfo<Value>& args) {
+    Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
+    v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
+
+    int argc = args.Length();
+    ThrowNotEnoughArgs(isolate, argc < 1);
+    v8Context context = isolate->GetCurrentContext();
+    String::Utf8Value path(args[0]);
+    if (!*path) {
+        ThrowError(isolate, "$load: path is empty string");
+    }
+    if (!strchr(*path, '/')) {
+        args.GetReturnValue().Set(v8::Null(isolate));
+        return;
+    }
+    dlerror();  /* Clear any existing error */
+    void *dl = dlopen(*path, RTLD_LAZY);
+    if (!dl) {
+        ThrowError(isolate, "$load: cannot dlopen library"); /* FIXME: use  dlerror() */
+    }
+
+    Fnload load_func = (Fnload) dlsym(dl, V8_LOAD_FUNC);
+    if (!load_func) {
+        dlclose(dl);
+        ThrowError(isolate,
+            "$load: cannot find library initialization function");
+    }
+
+    v8_ffn *functab;
+    v8Object o1 = Object::New(isolate);
+    v8_val val1 = ctype_handle(NewPersister(vm, o1));
+    errno = 0;
+    int nfunc = load_func(vm, val1, &v8fns, &functab);
+    DeletePersister(vm, val1.hndle);
+
+    if (nfunc < 0) {
+        dlclose(dl);
+        ThrowError(isolate, errno ? strerror(errno) : "$load: unknown error");
+    }
+    for (int i = 0; i < nfunc && functab[i].name; i++) {
+        v8Object fnObj;
+        if (functab[i].flags & V8_DLCORO) {
+            fnObj = NewGo(vm, functab[i].fp);
+        } else {
+            functab[i].flags = V8_CFUNC;
+            fnObj = WrapFunc(vm, &functab[i]);
+        }
+        o1->Set(context,
+                String::NewFromUtf8(isolate, functab[i].name),
+                fnObj).FromJust();
+    }
+    args.GetReturnValue().Set(o1);
 }
 
 

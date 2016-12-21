@@ -22,7 +22,7 @@ using namespace v8;
 
 extern "C" {
 
-v8Object Int64(js_vm *vm, int64_t i64) {
+v8Object Int64(v8_state vm, int64_t i64) {
     Isolate *isolate = vm->isolate;
     EscapableHandleScope handle_scope(isolate);
     v8ObjectTemplate templ =
@@ -36,7 +36,7 @@ v8Object Int64(js_vm *vm, int64_t i64) {
     return handle_scope.Escape(obj);
 }
 
-v8Object UInt64(js_vm *vm, uint64_t ui64) {
+v8Object UInt64(v8_state vm, uint64_t ui64) {
     Isolate *isolate = vm->isolate;
     EscapableHandleScope handle_scope(isolate);
     v8ObjectTemplate templ =
@@ -135,7 +135,7 @@ static struct lcmd_s {
     {0}
 };
 
-static v8Value LongOp2(js_vm *vm,
+static v8Value LongOp2(v8_state vm,
             long64 *i1, long64 *i2, enum LongCmd op) {
     Isolate *isolate = vm->isolate;
     EscapableHandleScope handle_scope(isolate);
@@ -212,7 +212,7 @@ static v8Value LongOp2(js_vm *vm,
 void LongCntl(const v8::FunctionCallbackInfo<v8::Value>& args) {
     int argc = args.Length();
     Isolate *isolate = args.GetIsolate();
-    js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
+    v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
     HandleScope handle_scope(isolate);
     ThrowNotEnoughArgs(isolate, argc < 1);
     enum LongCmd cmd = LONG_TOSTRING;
@@ -242,7 +242,7 @@ void LongCntl(const v8::FunctionCallbackInfo<v8::Value>& args) {
             sprintf(buf, "%" PRId64, i1.val.i64);
         else
             sprintf(buf, "%" PRIu64, i1.val.u64);
-        args.GetReturnValue().Set(V8_STR(isolate, buf));
+        args.GetReturnValue().Set(v8STR(isolate, buf));
     }
         break;
     case LONG_TONUMBER: {
@@ -352,7 +352,7 @@ void LongCntl(const v8::FunctionCallbackInfo<v8::Value>& args) {
 static void Long(const v8::FunctionCallbackInfo<v8::Value>& args) {
     int argc = args.Length();
     Isolate *isolate = args.GetIsolate();
-    js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
+    v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
     HandleScope handle_scope(isolate);
     ThrowNotEnoughArgs(isolate, argc < 1);
     v8Context context = isolate->GetCurrentContext();
@@ -398,14 +398,14 @@ static void Long(const v8::FunctionCallbackInfo<v8::Value>& args) {
         args.GetReturnValue().Set(UInt64(vm, i1.val.u64));
 }
 
-Local<FunctionTemplate> LongTemplate(js_vm *vm) {
+Local<FunctionTemplate> LongTemplate(v8_state vm) {
     Isolate *isolate = vm->isolate;
     EscapableHandleScope handle_scope(isolate);
 
     Local<FunctionTemplate> long_templ = FunctionTemplate::New(isolate, Long);
     for (unsigned i = 0; long_cmds[i].name; i++) {
         // Only primitive values are allowed!
-        long_templ->Set(V8_STR(isolate, long_cmds[i].name),
+        long_templ->Set(v8STR(isolate, long_cmds[i].name),
                 Integer::New(isolate, long_cmds[i].cmd));
     }
     return handle_scope.Escape(long_templ);

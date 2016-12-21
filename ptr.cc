@@ -59,7 +59,7 @@ static void Free(const FunctionCallbackInfo<Value>& args) {
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
     v8Object obj = args.Holder();
-    js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
+    v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
     if (GetObjectId(vm, obj) != V8EXTPTR)
         ThrowTypeError(isolate, "free: not a pointer");
     void *ptr = v8External::Cast(obj->GetInternalField(1))->Value();
@@ -77,7 +77,7 @@ static void Free(const FunctionCallbackInfo<Value>& args) {
 static void SizeOf(const FunctionCallbackInfo<Value>& args) {
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
-    js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
+    v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
     v8Object obj = args.Holder();
     if (GetObjectId(vm, obj) != V8EXTPTR)
         ThrowTypeError(isolate, "sizeOf: not a pointer");
@@ -90,7 +90,7 @@ static void SizeOf(const FunctionCallbackInfo<Value>& args) {
 static void NotNull(const FunctionCallbackInfo<Value>& args) {
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
-    js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
+    v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
     v8Object obj = args.Holder();
     if (GetObjectId(vm, obj) != V8EXTPTR)
         ThrowTypeError(isolate, "notNull: not a pointer");
@@ -106,7 +106,7 @@ static void NotNull(const FunctionCallbackInfo<Value>& args) {
 static void SetId(const FunctionCallbackInfo<Value>& args) {
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
-    js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
+    v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
     v8Object obj = args.Holder();
     if (GetObjectId(vm, obj) != V8EXTPTR)
         ThrowTypeError(isolate, "setId: not a pointer");
@@ -122,7 +122,7 @@ static void SetId(const FunctionCallbackInfo<Value>& args) {
 static void Utf8String(const FunctionCallbackInfo<Value>& args) {
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
-    js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
+    v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
     v8Object obj = args.Holder();
     if (GetObjectId(vm, obj) != V8EXTPTR)
         ThrowTypeError(isolate, "utf8String: not a pointer");
@@ -146,7 +146,7 @@ static void Utf8String(const FunctionCallbackInfo<Value>& args) {
 static void ToArrayBuffer(const FunctionCallbackInfo<Value>& args) {
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
-    js_vm *vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
+    v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
     v8Object obj = args.Holder();
     if (GetObjectId(vm, obj) != V8EXTPTR)
         ThrowTypeError(isolate, "toArrayBuffer: not a pointer");
@@ -486,7 +486,7 @@ static void Pack(const FunctionCallbackInfo<Value>& args) {
     HandleScope handle_scope(isolate);
     ThrowNotEnoughArgs(isolate, argc < 1);
     v8Object obj = args.Holder();
-    if (GetObjectId((js_vm *) isolate->GetData(0), obj) != V8EXTPTR) {
+    if (GetObjectId((v8_state ) isolate->GetData(0), obj) != V8EXTPTR) {
         ThrowTypeError(isolate, "pack: not a pointer");
     }
     void *ptr = v8External::Cast(obj
@@ -585,7 +585,7 @@ static v8Value unpack(void *ptr, char fmtc,
         *pwidth = strlen((char *) ptr) + 1;
         break;
     case 'p':
-        v = WrapPtr((js_vm *) isolate->GetData(0), *((void **) ptr));
+        v = WrapPtr((v8_state ) isolate->GetData(0), *((void **) ptr));
         *pwidth = sizeof (void *);
         break;
     case 'a': {
@@ -664,7 +664,7 @@ static void Unpack(const FunctionCallbackInfo<Value>& args) {
     HandleScope handle_scope(isolate);
     ThrowNotEnoughArgs(isolate, argc < 1);
     v8Object obj = args.Holder();
-    if (GetObjectId((js_vm *) isolate->GetData(0), obj) != V8EXTPTR) {
+    if (GetObjectId((v8_state ) isolate->GetData(0), obj) != V8EXTPTR) {
         ThrowTypeError(isolate, "unpack: not a pointer");
     }
     void *ptr = v8External::Cast(obj->GetInternalField(1))->Value();
@@ -688,13 +688,13 @@ static void Unpack(const FunctionCallbackInfo<Value>& args) {
     args.GetReturnValue().Set(v8::Null(isolate));
 }
 
-v8Object WrapPtr(js_vm *vm, void *ptr) {
+v8Object WrapPtr(v8_state vm, void *ptr) {
     Isolate *isolate = vm->isolate;
     assert(Locker::IsLocked(isolate));
     EscapableHandleScope handle_scope(isolate);
     if (!ptr) {
         return handle_scope.Escape(v8Object::Cast(
-                vm->store_->Get(vm->nullptr_handle)));
+                vm->store_->Get(NULLPTR_HANDLE)));
     }
     v8ObjectTemplate templ =
         v8ObjectTemplate::New(isolate, vm->extptr_template);
@@ -712,32 +712,32 @@ void *UnwrapPtr(v8Object ptrObj) {
 }
 
 // Construct the prototype object for C pointers and functions.
-void MakeCtypeProto(js_vm *vm) {
+void MakeCtypeProto(v8_state vm) {
     Isolate *isolate = vm->isolate;
     HandleScope handle_scope(isolate);
 
     // Create the proto object for the C-type pointer.
     //  cptr_object.__proto__ = ptr_proto;
     v8ObjectTemplate ptr_templ = ObjectTemplate::New(isolate);
-    ptr_templ->Set(V8_STR(isolate, "gc"),
+    ptr_templ->Set(v8STR(isolate, "gc"),
                 FunctionTemplate::New(isolate, Gc));
-    ptr_templ->Set(V8_STR(isolate, "free"),
+    ptr_templ->Set(v8STR(isolate, "free"),
                 FunctionTemplate::New(isolate, Free));
-    ptr_templ->Set(V8_STR(isolate, "sizeOf"),
+    ptr_templ->Set(v8STR(isolate, "sizeOf"),
                 FunctionTemplate::New(isolate, SizeOf));
-    ptr_templ->Set(V8_STR(isolate, "notNull"),
+    ptr_templ->Set(v8STR(isolate, "notNull"),
                 FunctionTemplate::New(isolate, NotNull));
-    ptr_templ->Set(V8_STR(isolate, "setId"),
+    ptr_templ->Set(v8STR(isolate, "setId"),
                 FunctionTemplate::New(isolate, SetId));
-    ptr_templ->Set(V8_STR(isolate, "utf8String"),
+    ptr_templ->Set(v8STR(isolate, "utf8String"),
                 FunctionTemplate::New(isolate, Utf8String));
-    ptr_templ->Set(V8_STR(isolate, "pack"),
+    ptr_templ->Set(v8STR(isolate, "pack"),
                 FunctionTemplate::New(isolate, Pack));
-    ptr_templ->Set(V8_STR(isolate, "unpack"),
+    ptr_templ->Set(v8STR(isolate, "unpack"),
                 FunctionTemplate::New(isolate, Unpack));
-    ptr_templ->Set(V8_STR(isolate, "packSize"),
+    ptr_templ->Set(v8STR(isolate, "packSize"),
                 FunctionTemplate::New(isolate, PackSize));
-    ptr_templ->Set(V8_STR(isolate, "toArrayBuffer"),
+    ptr_templ->Set(v8STR(isolate, "toArrayBuffer"),
                 FunctionTemplate::New(isolate, ToArrayBuffer));
 
     // Create the one and only proto instance.

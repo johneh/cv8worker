@@ -12,16 +12,6 @@ enum {
     V8GO,
 };
 
-/*
-    V8UNDEFINED,
-    V8NULL,
-    V8NUMBER,
-    V8STRING,
-    V8OBJECT,
-    V8ARRAY,
-    V8FUNC,
-*/
-
 enum js_cmd {
     V8COMPILERUN = 1,
     V8CALL,
@@ -31,20 +21,14 @@ enum js_cmd {
 
 struct js8_cmd_s {
     enum js_cmd type;
-    int nargs;   /* js_call */
+    int nargs;   /* call, callstr */
     js_vm *vm;
 
-    union {
-        v8_handle h1;
-        char *source;
-    };
-    v8_handle a[4];
+    v8_val h1;
+    v8_val a[4];   /* strictly for arguments */
 
     /* input + output */
-    volatile union {
-        v8_handle h;
-        int weak_counter;
-    };
+    v8_val h2;
 };
 
 extern js_vm *js8_vmnew(mill_worker w);

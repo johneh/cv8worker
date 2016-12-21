@@ -14,45 +14,40 @@
 
 static char *readfile(const char *filename, size_t *len);
 
-void js_panic(v8_state vm) {
-    fprintf(stderr, "%s\n", v8_errstr(vm));
-    exit(1);
-}
-
-v8_handle ff_readfile(v8_state vm, int argc, v8_handle argv[]) {
-    const char *filename = v8_tostring(vm, argv[1]);
+v8_val ff_readfile(v8_state vm, int argc, v8_val argv[]) {
+    const char *filename = V8_TOSTR(argv[0]);
     size_t sz;
     char *buf = readfile(filename, & sz);
-    v8_handle ret;
+    v8_val ret;
     if (buf) {
-        ret = v8_string(vm, buf, sz);
+        ret = V8_STR(buf, sz);
         free(buf);
     } else
-        ret = v8_null(vm);
+        ret = V8_NULL;
     return ret;
 }
 
-v8_handle ff_realpath(v8_state vm, int argc, v8_handle argv[]) {
-    const char *path = v8_tostring(vm, argv[1]);
+v8_val ff_realpath(v8_state vm, int argc, v8_val argv[]) {
+    const char *path = V8_TOSTR(argv[0]);
     char *resolved_path = realpath(path, NULL);
-    v8_handle ret;
+    v8_val ret;
     if (resolved_path) {
-        ret = v8_string(vm, resolved_path, strlen(resolved_path));
+        ret = V8_STR(resolved_path, strlen(resolved_path));
         free(resolved_path);
     } else
-        ret = v8_null(vm);
+        ret = V8_NULL;
     return ret;
 }
 
-v8_handle ff_isfile(v8_state vm, int argc, v8_handle argv[]) {
-    const char *path = v8_tostring(vm, argv[1]);
+v8_val ff_isfile(v8_state vm, int argc, v8_val argv[]) {
+    const char *path = V8_TOSTR(argv[0]);
     struct stat sbuf;
     int ret = 0;
     if (path && stat(path, & sbuf) == 0) {
         if (S_ISREG(sbuf.st_mode))
             ret = 1;
     }
-    return v8_number(vm, ret);
+    return V8_INT32(ret);
 }
 
 static v8_ffn ff_table[] = {
@@ -62,22 +57,21 @@ static v8_ffn ff_table[] = {
 };
 
 /* Return an object with the exported C functions */
-v8_handle exports(v8_state vm) {
+v8_val exports(v8_state vm) {
     int i;
     int n = sizeof (ff_table) / sizeof (ff_table[0]);
-    v8_handle h1 = v8_object(vm);
+    v8_val h1 = jsv8->object(vm);
     for (i = 0; i < n; i++) {
-        v8_handle f1 = v8_cfunc(vm, &ff_table[i]);
-        if (! v8_set(vm, h1, ff_table[i].name, f1))
-            js_panic(vm);
-        v8_reset(vm, f1);
+        v8_val f1 = v8_cfunc(vm, &ff_table[i]);
+        jsv8->set(vm, h1, ff_table[i].name, f1);
+        jsv8->reset(vm, f1);
     }
     return h1;
 }
 
-v8_handle parse_args(v8_state vm, int argc, char **argv, char **path) {
-    v8_handle hargs = v8_array(vm, argc);
-    v8_handle hs;
+v8_val parse_args(v8_state vm, int argc, char **argv, char **path) {
+    v8_val hargs = jsv8->array(vm, argc);
+    v8_val hs;
     int i;
     *path = NULL;
     for (i = 1; i < argc; i++) {
@@ -87,18 +81,39 @@ v8_handle parse_args(v8_state vm, int argc, char **argv, char **path) {
             *path = argv[++i];
             continue;
         }
-        hs = v8_string(vm, argv[i], strlen(argv[i]));
-        v8_seti(vm, hargs, i-1, hs);
-        v8_reset(vm, hs);
+        hs = V8_STR(argv[i], strlen(argv[i]));
+        jsv8->seti(vm, hargs, i-1, hs);
+        jsv8->reset(vm, hs);
     }
     return hargs;
 }
 
-coroutine void set_timeout(v8_state vm, v8_handle hcr, void *p1) {
+coroutine void set_timeout(v8_state vm, v8_val cr, void *p1) {
     int64_t delay = *((int64_t *) p1);
     mill_sleep(now()+delay);
-    v8_goresolve(vm, hcr, NULL, 0, 1);
+    jsv8->goresolve(vm, cr, NULL, 0, 1);
 }
+
+#if 0
+int finished = 0;
+
+coroutine void testcall(v8_state vm, mill_wgroup wg) {
+    mill_wgadd(wg);
+    v8_val hglobal = jsv8->global(vm);
+    int count = 0;
+    while (!finished) {
+        mill_sleep(now()+1);
+        count++;
+        jsv8->set(vm, hglobal, "counter", V8_INT32(count));
+    }
+    //h1 = jsv8->get(vm, jsv8->global(vm), "counter");
+    //printf("counter = %d\n", jsv8->toint32(vm, h1));
+    //jsv8->reset(vm, h1);
+    v8_val ctval = jsv8->get(vm, hglobal, "counter");
+    fprintf(stderr, "counter = %d\n", V8_TOINT32(vm, ctval));
+}
+#endif
+
 
 #ifndef MODULEPATH
 #define MODULEPATH "."
@@ -122,18 +137,18 @@ int main(int argc, char **argv) {
     v8_state vm = js_vmopen(w);
 
     char *libpath = NULL;
-    v8_handle hargs = parse_args(vm, argc, argv, &libpath);
-    v8_handle loader = exports(vm);
+    v8_val hargs = parse_args(vm, argc, argv, &libpath);
+    v8_val loader = exports(vm);
     if (!libpath)   /* TODO: path from an enviroment variable */
         libpath = MODULEPATH;
 
-    v8_handle htmp = v8_string(vm, libpath, -1);
-    v8_set(vm, loader, "path", htmp);
-    v8_reset(vm, htmp);
+    v8_val htmp = V8_STR(libpath, strlen(libpath));
+    jsv8->set(vm, loader, "path", htmp);
+    jsv8->reset(vm, htmp);
 
-    htmp = v8_go(vm, set_timeout);
-    v8_set(vm, loader, "msleep", htmp);
-    v8_reset(vm, htmp);
+    htmp = jsv8->goroutine(vm, set_timeout);
+    jsv8->set(vm, loader, "msleep", htmp);
+    jsv8->reset(vm, htmp);
 
     char *mainpath = strdup(libpath);
     assert(mainpath);
@@ -147,13 +162,22 @@ int main(int argc, char **argv) {
     snprintf(s, PATH_MAX+256, fmt_src, mainpath, "__main__.js");
     free(mainpath);
 
-    v8_handle hret = v8_callstr(vm, s, v8_global(vm),
-                            (v8_args) { loader, hargs });
-    if (!hret)
-        js_panic(vm);
-    v8_reset(vm, hret);
-    v8_reset(vm, loader);
-    v8_reset(vm, hargs);
+//mill_wgroup wg = mill_wgmake();
+//go(testcall(vm, wg));
+
+    v8_val args[] = { loader, hargs };
+    v8_val retval = jsv8->callstr(vm, s, V8_GLOBAL, 2, args);
+    if (V8_ISERROR(retval)) {
+        fprintf(stderr, "%s\n", V8_ERRSTR(retval));
+        exit(1);
+    }
+
+//    finished = 1;
+//   mill_wgwait(wg, -1);
+
+    jsv8->reset(vm, retval);
+    jsv8->reset(vm, loader);
+    jsv8->reset(vm, hargs);
 
     js_vmclose(vm);
     mill_worker_delete(w);
