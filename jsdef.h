@@ -147,20 +147,20 @@ struct v8_fn_s {
 /* void return - undef in js */
 #define V8_VOID (v8_val) { .type = V8_CTYPE_VOID }
 
-#define V8_INT32(i) (v8_val) { .i32 = i, .type = V8_CTYPE_INT32 }
-#define V8_UINT32(ui) (v8_val) { .ui32 = ui, .type = V8_CTYPE_UINT32 }
-#define V8_DOUBLE(d) (v8_val) { .d = d, .type = V8_CTYPE_DOUBLE }
+#define V8_INT32(i_) (v8_val) { .i32 = i_, .type = V8_CTYPE_INT32 }
+#define V8_UINT32(ui_) (v8_val) { .ui32 = ui_, .type = V8_CTYPE_UINT32 }
+#define V8_DOUBLE(d_) (v8_val) { .d = d_, .type = V8_CTYPE_DOUBLE }
 
-#define V8_LONG(l) (v8_val) { .i64 = l, .type = V8_CTYPE_LONG }
-#define V8_ULONG(ul) (v8_val) { .u64 = ul, .type = V8_CTYPE_ULONG }
+#define V8_LONG(l_) (v8_val) { .i64 = l_, .type = V8_CTYPE_LONG }
+#define V8_ULONG(ul_) (v8_val) { .u64 = ul_, .type = V8_CTYPE_ULONG }
 
 /* pointer _must_ not be the result of V8_TOSTR() */
-#define V8_PTR(p) (v8_val) { .ptr = p, .type = V8_CTYPE_PTR }
+#define V8_PTR(p_) (v8_val) { .ptr = p_, .type = V8_CTYPE_PTR }
 
 /* string copied */
-#define V8_STR(s, l)    jsv8->ctypestr_(s, l)
+#define V8_STR(s_, l_)    jsv8->ctypestr_(s_, l_)
 
-#define V8_HANDLE(h) (v8_val) { .hndle = h, .type = V8_CTYPE_HANDLE }
+#define V8_HANDLE(h_) (v8_val) { .hndle = h_, .type = V8_CTYPE_HANDLE }
 
 #define V8_GLOBAL   (*jsv8->global_)
 #define V8_NULL     (*jsv8->null_)
