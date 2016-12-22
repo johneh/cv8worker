@@ -1305,6 +1305,25 @@ v8_val v8_getbuffer(v8_state vm, v8_val val) {
     return ctype_handle(NewPersister(vm, ab));
 }
 
+void *v8_buffer(v8_state vm, v8_val abval) {
+    Isolate *isolate = vm->isolate;
+    LOCK_SCOPE(isolate)
+    v8Value v = ctype_to_v8(vm, &abval);
+    if (!v.IsEmpty()) {
+        if (v->IsArrayBuffer()) {
+            return v8ArrayBuffer::Cast(v)->GetContents().Data();
+        }
+        if (v->IsArrayBufferView()) {
+            v8ArrayBufferView av = v8ArrayBufferView::Cast(v);
+            return (char *)av->Buffer()->GetContents().Data() +
+                        av->ByteOffset();
+        }
+    }
+    Panic("buffer: invalid handle");
+    return nullptr;
+}
+
+#if 0
 void *v8_externalize(v8_state vm, v8_val val) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate);
@@ -1315,6 +1334,7 @@ void *v8_externalize(v8_state vm, v8_val val) {
     Panic("externalize: ArrayBuffer argument expected");
     return nullptr;
 }
+#endif
 
 static void v8_reset(v8_state vm, v8_val val) {
     switch (val.type) {
@@ -1484,6 +1504,7 @@ static struct v8_fn_s v8fns = {
     v8_arraybuffer,
     v8_bytelength,  /* ArrayBuffer(View) */
     v8_byteoffset, /* ArrayBufferView */
+    v8_buffer,
     v8_reset,
     v8_go,
     v8_goresolve,

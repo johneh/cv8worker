@@ -422,7 +422,7 @@ protected:
 
         // the struct entry for the table of functions
         char buf[256];
-        size_t n = snprintf(buf, 256, "{ %d, do_%s, \"%s\", V8_CFUNC },\n",
+        size_t n = snprintf(buf, 256, "{ %d, do_%s, \"%s\"},\n",
                             numParams, cname, cname);
         ASSERT(n < 256);
         m_fns.append(buf);
@@ -468,7 +468,7 @@ protected:
         switch (jsType) {
         case JsType::Void:
             fprintf(stdout, "%s(", fname);
-            ends = "return V8_VOID;";
+            ends = "return V8_VOID;\n";
             break;
         case JsType::Int:
             fprintf(stdout, "int r = (int) %s(", fname);

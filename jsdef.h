@@ -77,6 +77,7 @@ struct v8_fn_s {
     v8_val (*arraybuffer)(v8_state vm, void *ptr, size_t byte_length);
     size_t (*bytelength)(v8_state vm, v8_val val);  /* ArrayBuffer(View) */
     size_t (*byteoffset)(v8_state vm, v8_val val); /* ArrayBufferView */
+    void * (*buffer)(v8_state vm, v8_val abval); /* ArrayBuffer(View) */
 
     void (*reset)(v8_state vm, v8_val val);
 
