@@ -494,11 +494,14 @@ static void EvalString(const FunctionCallbackInfo<Value>& args) {
     ScriptOrigin origin(name);
     v8Script script;
     if (!Script::Compile(context, source, &origin).ToLocal(&script)) {
-        Panic(GetExceptionString(isolate, &try_catch));
+        // XXX: don't panic
+        fprintf(stderr, "%s\n", GetExceptionString(isolate, &try_catch));
+        exit(1);
     }
     v8Value result;
     if (!script->Run(context).ToLocal(&result)) {
-        Panic(GetExceptionString(isolate, &try_catch));
+        fprintf(stderr, "%s\n", GetExceptionString(isolate, &try_catch));
+        exit(1);
     }
     assert(!result.IsEmpty());
     args.GetReturnValue().Set(result);

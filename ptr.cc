@@ -69,23 +69,6 @@ static void Free(const FunctionCallbackInfo<Value>& args) {
     }
 }
 
-// ptr.sizeOf() == -1 if opaque (and not nullptr)
-// == 0 if ptr == $nullptr
-// > 0, otherwise
-// N.B. isNullPtr() test:  (ptr.sizeOf() == 0), or simply (ptr === $nullptr)
-
-static void SizeOf(const FunctionCallbackInfo<Value>& args) {
-    Isolate *isolate = args.GetIsolate();
-    HandleScope handle_scope(isolate);
-    v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
-    v8Object obj = args.Holder();
-    if (GetObjectId(vm, obj) != V8EXTPTR)
-        ThrowTypeError(isolate, "sizeOf: not a pointer");
-    int size = GetCtypeSize(obj);
-    args.GetReturnValue().Set(Integer::New(isolate, size));
-}
-
-
 // ptr.notNull() -- ensure pointer is not NULL.
 static void NotNull(const FunctionCallbackInfo<Value>& args) {
     Isolate *isolate = args.GetIsolate();
@@ -120,61 +103,48 @@ static void SetId(const FunctionCallbackInfo<Value>& args) {
 
 // ptr.utf8String(length = -1)
 static void Utf8String(const FunctionCallbackInfo<Value>& args) {
+    int argc = args.Length();
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
     v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
+
     v8Object obj = args.Holder();
-    if (GetObjectId(vm, obj) != V8EXTPTR)
-        ThrowTypeError(isolate, "utf8String: not a pointer");
-    void *ptr = v8External::Cast(obj->GetInternalField(1))->Value();
-    if (!ptr)
-        ThrowError(isolate, "utf8String: pointer is null");
-    int length = GetCtypeSize(obj);
-    if (args.Length() > 0) {
-        length = args[0]->Int32Value(isolate->GetCurrentContext()).FromJust();
-        if (length < 0)
-            length = -1;
-    }
-    args.GetReturnValue().Set(String::NewFromUtf8(isolate,
-                (char *) ptr, v8::String::kNormalString, length));
-}
-
-/* N.B.: V8 owns the Buffer memory. "ptr" must be compatible with
- * ArrayBuffer::Allocator::Free. The pointer object is neutered.
- * BUG (FIXME) -- ptr with gc callback ??? 
- */
-static void ToArrayBuffer(const FunctionCallbackInfo<Value>& args) {
-    Isolate *isolate = args.GetIsolate();
-    HandleScope handle_scope(isolate);
-    v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
-    v8Object obj = args.Holder();
-    if (GetObjectId(vm, obj) != V8EXTPTR)
-        ThrowTypeError(isolate, "toArrayBuffer: not a pointer");
-    void *ptr = v8External::Cast(obj->GetInternalField(1))->Value();
-    if (!ptr)
-        ThrowError(isolate, "toArrayBuffer: pointer is null");
-
-    int byte_length = GetCtypeSize(obj);
-#if 0
-    if (byte_length < 0) {
-        int argc = args.Length();
-        ThrowNotEnoughArgs(isolate, argc < 1);
-        byte_length = args[0]->Int32Value(
-                    isolate->GetCurrentContext()).FromJust();
-    }
-#endif
-
-    if (byte_length <= 0) {
-        /* ThrowError(isolate, "toArrayBuffer: invalid size"); */
-        args.GetReturnValue().Set(v8::Null(isolate));
+    void *ptr;
+    int maxLength;
+    if (obj->IsArrayBuffer()) {
+        ArrayBuffer::Contents c = v8ArrayBuffer::Cast(obj)->GetContents();
+        ptr = c.Data();
+        maxLength = (int) c.ByteLength();
+    } else if (GetObjectId(vm, obj) == V8EXTPTR) {
+        ptr = v8External::Cast(obj
+                        -> GetInternalField(1))->Value();
+        if (!ptr)
+            ThrowError(isolate, "utf8String: pointer is null");
+        maxLength = GetCtypeSize(obj);
     } else {
-        // neuter pointer object
-        obj->SetInternalField(1, External::New(isolate, nullptr));
-
-        args.GetReturnValue().Set(ArrayBuffer::New(isolate, ptr, byte_length,
-                    v8::ArrayBufferCreationMode::kInternalized));
+        ThrowTypeError(isolate, "utf8String: not a pointer");
     }
+
+    int byteLength = -1;
+    if (maxLength < 0) {    // pointer
+        if (argc == 0)
+            ThrowError(isolate, "utf8String: LENGTH argument required");
+        byteLength = args[0]->Int32Value(isolate->GetCurrentContext()).FromJust();
+        if (byteLength < 0)
+            byteLength = -1;    // assume nul-terminated
+    } else if (argc > 0) {
+        byteLength = args[0]->Int32Value(isolate->GetCurrentContext()).FromJust();
+        if (byteLength < 0)
+            byteLength = -1;
+        else if (byteLength > maxLength)
+            byteLength = maxLength;
+    } else {
+        byteLength = maxLength;
+    }
+    args.GetReturnValue().Set(String::NewFromUtf8(isolate, (char *) ptr,
+                v8::NewStringType::kNormal, byteLength).ToLocalChecked());
 }
+
 
 static int packint(v8Value val,
             int width, int issigned, void *ptr, Isolate *isolate) {
@@ -214,9 +184,10 @@ enum {
     InvalidValue
 };
 
+// FIXME -- use pure JS implementation. 
 static int32_t packsize(int fmt, Isolate *isolate, v8Value val) {
     switch (fmt) {
-    case '_':
+    case '_':   /* null */
         return 0;
     case 'c':
     case 'b':
@@ -486,13 +457,18 @@ static void Pack(const FunctionCallbackInfo<Value>& args) {
     HandleScope handle_scope(isolate);
     ThrowNotEnoughArgs(isolate, argc < 1);
     v8Object obj = args.Holder();
-    if (GetObjectId((v8_state ) isolate->GetData(0), obj) != V8EXTPTR) {
+    void *ptr;
+    if (obj->IsArrayBuffer()) {
+        ptr = v8ArrayBuffer::Cast(obj)->GetContents().Data();
+    } else if (GetObjectId((v8_state) isolate->GetData(0), obj) == V8EXTPTR) {
+        ptr = v8External::Cast(obj
+                        -> GetInternalField(1))->Value();
+        if (!ptr)
+            ThrowError(isolate, "pack: pointer is null");
+    } else {
         ThrowTypeError(isolate, "pack: not a pointer");
     }
-    void *ptr = v8External::Cast(obj
-                        -> GetInternalField(1))->Value();
-    if (!ptr)
-        ThrowError(isolate, "pack: pointer is null");
+
     if (!args[0]->IsUint32())
         ThrowError(isolate, "pack: offset is not unsigned integer");
     size_t off = args[0]->Uint32Value(isolate->GetCurrentContext()).FromJust();
@@ -664,13 +640,18 @@ static void Unpack(const FunctionCallbackInfo<Value>& args) {
     HandleScope handle_scope(isolate);
     ThrowNotEnoughArgs(isolate, argc < 1);
     v8Object obj = args.Holder();
-    if (GetObjectId((v8_state ) isolate->GetData(0), obj) != V8EXTPTR) {
-        ThrowTypeError(isolate, "unpack: not a pointer");
+    void *ptr;
+    if (obj->IsArrayBuffer()) {
+        ptr = v8ArrayBuffer::Cast(obj)->GetContents().Data();
+    } else if (GetObjectId((v8_state ) isolate->GetData(0), obj) == V8EXTPTR) {
+        ptr = v8External::Cast(obj
+                        -> GetInternalField(1))->Value();
+        if (!ptr)
+            ThrowError(isolate, "pack: pointer is null");
+    } else {
+        ThrowTypeError(isolate, "pack: not a pointer");
     }
-    void *ptr = v8External::Cast(obj->GetInternalField(1))->Value();
 
-    if (!ptr)
-        ThrowError(isolate, "unpack: pointer is null");
     if (!args[0]->IsUint32())
         ThrowError(isolate, "unpack: offset is not unsigned integer");
     size_t off = args[0]->Uint32Value(isolate->GetCurrentContext()).FromJust();
@@ -723,8 +704,6 @@ void MakeCtypeProto(v8_state vm) {
                 FunctionTemplate::New(isolate, Gc));
     ptr_templ->Set(v8STR(isolate, "free"),
                 FunctionTemplate::New(isolate, Free));
-    ptr_templ->Set(v8STR(isolate, "sizeOf"),
-                FunctionTemplate::New(isolate, SizeOf));
     ptr_templ->Set(v8STR(isolate, "notNull"),
                 FunctionTemplate::New(isolate, NotNull));
     ptr_templ->Set(v8STR(isolate, "setId"),
@@ -737,8 +716,6 @@ void MakeCtypeProto(v8_state vm) {
                 FunctionTemplate::New(isolate, Unpack));
     ptr_templ->Set(v8STR(isolate, "packSize"),
                 FunctionTemplate::New(isolate, PackSize));
-    ptr_templ->Set(v8STR(isolate, "toArrayBuffer"),
-                FunctionTemplate::New(isolate, ToArrayBuffer));
 
     // Create the one and only proto instance.
     v8Object ptr_proto = ptr_templ

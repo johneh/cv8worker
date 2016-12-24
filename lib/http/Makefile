@@ -11,7 +11,7 @@ all: libhttp.so
 SO_CFLAGS = -fPIC -Wall -c -g -I. -I$(TOPDIR)
 SO_LDFLAGS = -shared
 
-http.o: $(TOPDIR)/jsv8dlfn.h mssl.h http.c
+http.o: $(TOPDIR)/jsdef.h $(TOPDIR)/jsv8dlfn.h mssl.h http.c
 	$(CC) $(SO_CFLAGS) -I$(MILL_INCLUDES) http.c
 
 mssl.o: mssl.h mssl.c
