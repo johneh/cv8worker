@@ -533,7 +533,7 @@ static void Malloc(const v8::FunctionCallbackInfo<v8::Value>& args) {
 //
 
 // $isPointer(v [, typeid])
-void IsPointer(const FunctionCallbackInfo<Value>& args) {
+static void IsPointer(const FunctionCallbackInfo<Value>& args) {
     int argc = args.Length();
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
@@ -624,6 +624,36 @@ static void CallForeignFunc(
         Panic("received invalid return value from C-function");
     args.GetReturnValue().Set(retv);
     v8_reset(vm, retval);
+}
+
+// ArrayBuffer.transfer()?
+// $transfer(oldBuffer, newByteLength)
+static void Transfer(const FunctionCallbackInfo<Value>& args) {
+    int argc = args.Length();
+    Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
+    ThrowNotEnoughArgs(isolate, argc < 2);
+
+    if (!args[0]->IsArrayBuffer()
+            || !v8ArrayBuffer::Cast(args[0])->IsNeuterable()
+    ) {
+        ThrowTypeError(isolate, "argument #1 is not (neuterable) ArrayBuffer");
+    }
+    v8ArrayBuffer ab = v8ArrayBuffer::Cast(args[0]);
+    uint32_t byteLength = args[1]->Uint32Value(
+                        isolate->GetCurrentContext()).FromJust();
+    ArrayBuffer::Contents c = ab->Externalize();
+  /**
+   * Neuters this ArrayBuffer and all its views (typed arrays).
+   * Neutering sets the byte length of the buffer and all typed arrays to zero,
+   * preventing JavaScript from ever accessing underlying backing store.
+   * ArrayBuffer should have been externalized and must be neuterable.
+   */
+    ab->Neuter();
+    args.GetReturnValue().Set(ArrayBuffer::New(isolate,
+                    erealloc(c.Data(), byteLength),
+                    byteLength,
+                    v8::ArrayBufferCreationMode::kInternalized));
 }
 
 // TODO: use pthread_once
@@ -1057,6 +1087,8 @@ static void CreateIsolate(v8_state vm) {
     global->Set(v8STR(isolate, "$lcntl"),
                 FunctionTemplate::New(isolate, LongCntl));
     global->Set(v8STR(isolate, "$long"), LongTemplate(vm));
+    global->Set(v8STR(isolate, "$transfer"),
+                FunctionTemplate::New(isolate, Transfer));
 
     v8Context context = Context::New(isolate, NULL, global);
     if (context.IsEmpty()) {

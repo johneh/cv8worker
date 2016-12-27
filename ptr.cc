@@ -208,11 +208,12 @@ static int32_t packsize(int fmt, Isolate *isolate, v8Value val) {
     case 'J':   /* uint64_t */
     case 'd':
         return 8;
+    case 'S':
     case 's': {
         /* nul-terminated string */
         v8String s = val->ToString(
                     isolate->GetCurrentContext()).ToLocalChecked();
-        return s->Utf8Length() + 1;
+        return (fmt == 's' ? (s->Utf8Length() + 1) : s->Utf8Length());
     }
     case 'a': {
         size_t byte_length;
@@ -351,14 +352,18 @@ static int32_t pack(void *ptr, int fmt, Isolate *isolate, v8Value val) {
         return 8;
     case 'x':   /* padding */
         return 1;
+    case 'S':
     case 's': {
         /* nul-terminated string */
         v8String s = val->ToString(
                     isolate->GetCurrentContext()).ToLocalChecked();
         int utf8len = s->Utf8Length();      /* >= 0 */
         int l = s->WriteUtf8((char *)ptr, utf8len);
-        *((char *) ptr + l) = '\0';
-        return l+1;
+        if (fmt == 's') {
+            *((char *) ptr + l) = '\0';
+            return l+1;
+        } else
+            return l;
     }
     case 'a':   /* arraybuffer, typedarray or dataview, string or ptr */
         if (val->IsArrayBufferView()) {
