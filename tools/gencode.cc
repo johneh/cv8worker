@@ -338,6 +338,10 @@ public:
 
                 if (skipFuncs.count(fName) > 0)
                     return true;
+                if (funcDecl->isVariadic()) {
+                    fprintf(stderr, "skipping variadic function: %s\n", fName.c_str());
+                    return true;
+                }
 
                 MakeWrapStart(fName, funcDecl->getNumParams());
                 for (unsigned i = 0, j = funcDecl->getNumParams(); i != j; ++i) {

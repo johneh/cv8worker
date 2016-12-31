@@ -2519,16 +2519,6 @@ void *p0 = V8_TOPTR(argv[0]);
 int r = (int) XCloseOM(p0);
 return V8_INT32(r);
 }
-static v8_val do_XSetOMValues(v8_state vm, int argc, v8_val argv[]) {
-void *p0 = V8_TOPTR(argv[0]);
-void *r = (void *) XSetOMValues(p0);
-return V8_PTR(r);
-}
-static v8_val do_XGetOMValues(v8_state vm, int argc, v8_val argv[]) {
-void *p0 = V8_TOPTR(argv[0]);
-void *r = (void *) XGetOMValues(p0);
-return V8_PTR(r);
-}
 static v8_val do_XDisplayOfOM(v8_state vm, int argc, v8_val argv[]) {
 void *p0 = V8_TOPTR(argv[0]);
 void *r = (void *) XDisplayOfOM(p0);
@@ -2539,11 +2529,6 @@ void *p0 = V8_TOPTR(argv[0]);
 void *r = (void *) XLocaleOfOM(p0);
 return V8_PTR(r);
 }
-static v8_val do_XCreateOC(v8_state vm, int argc, v8_val argv[]) {
-void *p0 = V8_TOPTR(argv[0]);
-void *r = (void *) XCreateOC(p0);
-return V8_PTR(r);
-}
 static v8_val do_XDestroyOC(v8_state vm, int argc, v8_val argv[]) {
 void *p0 = V8_TOPTR(argv[0]);
 XDestroyOC(p0);
@@ -2552,16 +2537,6 @@ return V8_VOID;
 static v8_val do_XOMOfOC(v8_state vm, int argc, v8_val argv[]) {
 void *p0 = V8_TOPTR(argv[0]);
 void *r = (void *) XOMOfOC(p0);
-return V8_PTR(r);
-}
-static v8_val do_XSetOCValues(v8_state vm, int argc, v8_val argv[]) {
-void *p0 = V8_TOPTR(argv[0]);
-void *r = (void *) XSetOCValues(p0);
-return V8_PTR(r);
-}
-static v8_val do_XGetOCValues(v8_state vm, int argc, v8_val argv[]) {
-void *p0 = V8_TOPTR(argv[0]);
-void *r = (void *) XGetOCValues(p0);
 return V8_PTR(r);
 }
 static v8_val do_XCreateFontSet(v8_state vm, int argc, v8_val argv[]) {
@@ -2821,16 +2796,6 @@ void *p0 = V8_TOPTR(argv[0]);
 int r = (int) XCloseIM(p0);
 return V8_INT32(r);
 }
-static v8_val do_XGetIMValues(v8_state vm, int argc, v8_val argv[]) {
-void *p0 = V8_TOPTR(argv[0]);
-void *r = (void *) XGetIMValues(p0);
-return V8_PTR(r);
-}
-static v8_val do_XSetIMValues(v8_state vm, int argc, v8_val argv[]) {
-void *p0 = V8_TOPTR(argv[0]);
-void *r = (void *) XSetIMValues(p0);
-return V8_PTR(r);
-}
 static v8_val do_XDisplayOfIM(v8_state vm, int argc, v8_val argv[]) {
 void *p0 = V8_TOPTR(argv[0]);
 void *r = (void *) XDisplayOfIM(p0);
@@ -2839,11 +2804,6 @@ return V8_PTR(r);
 static v8_val do_XLocaleOfIM(v8_state vm, int argc, v8_val argv[]) {
 void *p0 = V8_TOPTR(argv[0]);
 void *r = (void *) XLocaleOfIM(p0);
-return V8_PTR(r);
-}
-static v8_val do_XCreateIC(v8_state vm, int argc, v8_val argv[]) {
-void *p0 = V8_TOPTR(argv[0]);
-void *r = (void *) XCreateIC(p0);
 return V8_PTR(r);
 }
 static v8_val do_XDestroyIC(v8_state vm, int argc, v8_val argv[]) {
@@ -2874,16 +2834,6 @@ return V8_PTR(r);
 static v8_val do_Xutf8ResetIC(v8_state vm, int argc, v8_val argv[]) {
 void *p0 = V8_TOPTR(argv[0]);
 void *r = (void *) Xutf8ResetIC(p0);
-return V8_PTR(r);
-}
-static v8_val do_XSetICValues(v8_state vm, int argc, v8_val argv[]) {
-void *p0 = V8_TOPTR(argv[0]);
-void *r = (void *) XSetICValues(p0);
-return V8_PTR(r);
-}
-static v8_val do_XGetICValues(v8_state vm, int argc, v8_val argv[]) {
-void *p0 = V8_TOPTR(argv[0]);
-void *r = (void *) XGetICValues(p0);
 return V8_PTR(r);
 }
 static v8_val do_XIMOfIC(v8_state vm, int argc, v8_val argv[]) {
@@ -2926,11 +2876,6 @@ void *p4 = V8_TOPTR(argv[4]);
 void *p5 = V8_TOPTR(argv[5]);
 int r = (int) Xutf8LookupString(p0,p1,p2,p3,p4,p5);
 return V8_INT32(r);
-}
-static v8_val do_XVaCreateNestedList(v8_state vm, int argc, v8_val argv[]) {
-int p0 = V8_TOINT32(argv[0]);
-void *r = (void *) XVaCreateNestedList(p0);
-return V8_PTR(r);
 }
 static v8_val do_XRegisterIMInstantiateCallback(v8_state vm, int argc, v8_val argv[]) {
 void *p0 = V8_TOPTR(argv[0]);
@@ -3054,7 +2999,6 @@ int p1 = V8_TOINT32(argv[1]);
 uint64_t r = (uint64_t) DefaultColormap(p0,p1);
 return V8_ULONG(r);
 }
-
 
 static v8_ffn fntab_[] = {
 { 2, do__Xmblen, "_Xmblen"},
@@ -3398,15 +3342,10 @@ static v8_ffn fntab_[] = {
 { 1, do_XSetLocaleModifiers, "XSetLocaleModifiers"},
 { 4, do_XOpenOM, "XOpenOM"},
 { 1, do_XCloseOM, "XCloseOM"},
-{ 1, do_XSetOMValues, "XSetOMValues"},
-{ 1, do_XGetOMValues, "XGetOMValues"},
 { 1, do_XDisplayOfOM, "XDisplayOfOM"},
 { 1, do_XLocaleOfOM, "XLocaleOfOM"},
-{ 1, do_XCreateOC, "XCreateOC"},
 { 1, do_XDestroyOC, "XDestroyOC"},
 { 1, do_XOMOfOC, "XOMOfOC"},
-{ 1, do_XSetOCValues, "XSetOCValues"},
-{ 1, do_XGetOCValues, "XGetOCValues"},
 { 5, do_XCreateFontSet, "XCreateFontSet"},
 { 2, do_XFreeFontSet, "XFreeFontSet"},
 { 3, do_XFontsOfFontSet, "XFontsOfFontSet"},
@@ -3436,25 +3375,19 @@ static v8_ffn fntab_[] = {
 { 8, do_Xutf8DrawImageString, "Xutf8DrawImageString"},
 { 4, do_XOpenIM, "XOpenIM"},
 { 1, do_XCloseIM, "XCloseIM"},
-{ 1, do_XGetIMValues, "XGetIMValues"},
-{ 1, do_XSetIMValues, "XSetIMValues"},
 { 1, do_XDisplayOfIM, "XDisplayOfIM"},
 { 1, do_XLocaleOfIM, "XLocaleOfIM"},
-{ 1, do_XCreateIC, "XCreateIC"},
 { 1, do_XDestroyIC, "XDestroyIC"},
 { 1, do_XSetICFocus, "XSetICFocus"},
 { 1, do_XUnsetICFocus, "XUnsetICFocus"},
 { 1, do_XwcResetIC, "XwcResetIC"},
 { 1, do_XmbResetIC, "XmbResetIC"},
 { 1, do_Xutf8ResetIC, "Xutf8ResetIC"},
-{ 1, do_XSetICValues, "XSetICValues"},
-{ 1, do_XGetICValues, "XGetICValues"},
 { 1, do_XIMOfIC, "XIMOfIC"},
 { 2, do_XFilterEvent, "XFilterEvent"},
 { 6, do_XmbLookupString, "XmbLookupString"},
 { 6, do_XwcLookupString, "XwcLookupString"},
 { 6, do_Xutf8LookupString, "Xutf8LookupString"},
-{ 1, do_XVaCreateNestedList, "XVaCreateNestedList"},
 { 6, do_XRegisterIMInstantiateCallback, "XRegisterIMInstantiateCallback"},
 { 6, do_XUnregisterIMInstantiateCallback, "XUnregisterIMInstantiateCallback"},
 { 3, do_XInternalConnectionNumbers, "XInternalConnectionNumbers"},
