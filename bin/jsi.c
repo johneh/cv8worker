@@ -94,6 +94,16 @@ coroutine void set_timeout(v8_state vm, v8_val cr, void *p1) {
     jsv8->goresolve(vm, cr, NULL, 0, 1);
 }
 
+// POLLIN only. FIXME
+coroutine void do_fdevent(v8_state vm, v8_val cr, void *ptr) {
+    int fd = *((int *) ptr);
+    int ret = mill_fdevent(fd, FDW_IN, -1);
+    if (ret != FDW_IN)
+        jsv8->goreject(vm, cr, strerror(EIO));
+    else
+        jsv8->goresolve(vm, cr, NULL, 0, 1);
+}
+
 #if 0
 int finished = 0;
 
@@ -148,6 +158,10 @@ int main(int argc, char **argv) {
 
     htmp = jsv8->goroutine(vm, set_timeout);
     jsv8->set(vm, loader, "msleep", htmp);
+    jsv8->reset(vm, htmp);
+
+    htmp = jsv8->goroutine(vm, do_fdevent);
+    jsv8->set(vm, loader, "fdevent", htmp);
     jsv8->reset(vm, htmp);
 
     char *mainpath = strdup(libpath);

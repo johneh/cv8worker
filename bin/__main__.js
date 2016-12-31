@@ -40,6 +40,8 @@
                     });
             };
 
+            this.fdevent = loader.fdevent;
+
             // unique Id (for use as ctypeid etc.) 
             loader._uId = 0;
             this.$uId = function () {
