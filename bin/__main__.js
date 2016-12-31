@@ -1,12 +1,12 @@
 (function () {
-    var load = function (loader, argv) {
+    const load = function (loader, argv) {
         // this === global object in main
         //      === parent module, otherwise.
 
-        var argc = argv.length;
-        var isFirst = false;
-        var modulePath;
-        var i;
+        let argc = argv.length;
+        let isFirst = false;
+        let modulePath;
+        let i;
 
         if (! loader.hasOwnProperty('__main__')) {
             isFirst = true;
@@ -51,7 +51,7 @@
 
         // $print("modulePath =", modulePath);
 
-        var path, filename;
+        let path, filename;
 
         if (argc == 0) {
             throw new Error('usage: jsi -f filename');
@@ -69,25 +69,25 @@
             throw new Error(path + ': No such file');
         //  $print("filename = ", filename);
 
-        var cache = loader._moduleCache;
+        const cache = loader._moduleCache;
         if (({}).hasOwnProperty.call(cache, filename)) {
             return cache[filename].exports;
         }
 
-        var module = {};
+        const module = {};
         module.__filename = filename;
 
         // XXX: starts with this default, can be changed in each module.
         module.__path = loader._defaultPath;
-        var dirname = module.__dirname
+        const dirname = module.__dirname
                 = filename.substring(0, filename.lastIndexOf('/'));
-        var exports = module.exports = {};
+        const exports = module.exports = {};
 
         if (isFirst)
             loader.__main__ = module;
         module.main = loader.__main__;
 
-        var moduleSource = loader.readFile(filename);
+        let moduleSource = loader.readFile(filename);
         if (moduleSource === null) {
             throw new Error(path + ': error reading file'); // FIXME strerror(errno)
         }
@@ -96,10 +96,10 @@
                         + moduleSource + "\n})";
 
         cache[filename] = module;
-        var moduleWrap = $eval(moduleSource, path);
-        var lastDir = loader._cwd;
+        const moduleWrap = $eval(moduleSource, path);
+        const lastDir = loader._cwd;
         loader._cwd = dirname;
-        var require = function (path) {
+        const require = function (path) {
             return load.call(module, loader, [ "-f", path ]);
         };
         moduleWrap.call(exports,
@@ -114,7 +114,7 @@
         return module.exports;
     }; // load
 
-    var _findFile = function (path, loader) {
+    const _findFile = function (path, loader) {
         if (/^\.\.?\//.test(path) && loader._cwd)
             path = loader._cwd + '/' + path;
         let found = loader.isRegularFile(path);
@@ -127,7 +127,7 @@
         return loader.realPath(path);
     };
 
-    var findFile = function (path, loader, searchPath) {
+    const findFile = function (path, loader, searchPath) {
         let filename = _findFile(path, loader);
         if (filename !== null)
             return filename;
@@ -146,7 +146,7 @@
         return null;
     };
 
-    var dlloader = function () {
+    const dlloader = function () {
         let dll = function (libname, dirname) {
             libname = libname + '';
             if (/^\.\.?\//.test(libname) && dirname)
@@ -173,8 +173,41 @@
             }
         };
 
-        dll.prototype.sizeof = function(s) {
-            s = s + '';
+        const _getRecord = function(lib, recName) {
+            // try typedef
+            if (lib._types.hasOwnProperty(recName)) {
+                return lib._types[recName];
+            }
+            // try struct
+            if (lib._tags.hasOwnProperty(recName)) {
+                return lib._tags[recName];
+            }
+            return null;
+        }
+
+        dll.prototype.structDesc = function (name) {
+            // if (typeof name !== 'string') ..
+            name = name + '';
+            const t = _getRecord(this, name);
+            if (t === null)
+                throw new Error('invalid record name');
+            let s = {};
+            for (let field in t) {
+                if (field === '#size')
+                    continue;
+                let ct = (t[field] >> 16);
+                if (ct)
+                    ct = String.fromCharCode(ct);
+                else
+                    ct = null;
+                s[field] = { offset : (t[field] & 0xFFFF), type : ct };
+            }
+            return s;
+        }
+
+        dll.prototype.sizeOf = function(s) {
+            if (typeof s !== 'string')
+                throw new TypeError('invalid argument');
             // try typedefs
             if (this._types.hasOwnProperty(s)) {
                 let t = this._types[s];
@@ -185,27 +218,29 @@
                 let t = this._tags[s];
                 if (t.hasOwnProperty('#size')) return t['#size'];
             }
-            // throw ?
+            throw new Error('non-existent struct');
         };
 
-        dll.prototype.offsetof = function (s, item) {
-            s = s + '';
-            let t = null;
-            if (this._types.hasOwnProperty(s)) {
-                t = this._types[s];
-            } else if (this._tags.hasOwnProperty(s)) {
-                t = this._tags[s];
+        dll.prototype.offsetOf = function (s, item) {
+            if (typeof s !== 'string' || typeof item !== 'string')
+                throw new TypeError('invalid argument(s)');
+            let t = _getRecord(this, s);
+            if (t !== null && item !== '#size' && t.hasOwnProperty(item))
+                return (t[item] & 0xFFFF);
+            throw new Error('non-existent record or field');
+        };
+
+        dll.prototype.typeOf = function (s, item) {
+            if (typeof s !== 'string' || typeof item !== 'string')
+                throw new TypeError('invalid argument(s)');
+            let t = _getRecord(this, s);
+            if (t !== null && item !== '#size' && t.hasOwnProperty(item)) {
+                let ct = (t[item] >> 16);
+                if (ct)
+                    return String.fromCharCode(ct);
+                return null;    // struct or union
             }
-            if (t !== null) {
-                if (!item)
-                    return JSON.stringify(t, function (k, v) {
-                            if (k != '#size') return v;
-                        });
-                item = item + '';
-                if (item != '#size' && t.hasOwnProperty(item))
-                    return t[item];
-            }
-            // throw ?
+            throw new Error('non-existent record or field');
         };
 
         Object.defineProperty(dll.prototype, "identifiers", {

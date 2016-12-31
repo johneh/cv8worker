@@ -1,42 +1,42 @@
 var i1, i2, i3;
 i1 = $long("123456789");
 $print($lcntl(i1));
-$print('issigned =', $lcntl(i1, $long.isInt64));
+$print('issigned =', !$lcntl(i1, $long.isUnsigned));
 $print('iszero =', $lcntl(i1, $long.not));
-i3 = $long(0, true);
-$print('issigned =', $lcntl(i3, $long.isInt64));
+i3 = $long(0, false);
+$print('issigned =', !$lcntl(i3, $long.isUnsigned));
 $print('iszero =', $lcntl(i3, $long.not));
 
-i2 = $long("123456789", true);
+i2 = $long("123456789", false);
 $print($lcntl(i1, $long.toString));
 $print('isequal =', $lcntl(i1, $long.eq, i2));
 
 i1 = $long("-123456789");
 $print($lcntl(i1));
-i2 = $long("-123456789", true);
+i2 = $long("-123456789", false);
 $print($lcntl(i2));
 
 i1 = $long("1234567890123");
 var low = $lcntl(i1, $long.low32);
 var high = $lcntl(i1, $long.high32);
-i2 = $long([low, high]);
+i2 = $long(low, high, true);
 $print($lcntl(i1), $lcntl(i2));
 
 i1 = $long("143141355151351515616565165161613");
 $print($lcntl(i1));	// == "0"
 
-$print($lcntl($long([0, 0])),
-		$lcntl($long([1, 0])),
+$print($lcntl($long(0, 0, true)),
+		$lcntl($long(1, 0, true)),
 		$lcntl($long({}))	// == 0
 );
 
-$print($lcntl($long([-1, -1], true)));	// UINT64_MAX
-$print($lcntl($long([-1, ~(1 << 31)])));  // INT64_MAX
-i1 = $long([0, (1 << 31)]); // INT64_MIN
+$print($lcntl($long(-1, -1, false)));	// UINT64_MAX
+$print($lcntl($long(-1, ~(1 << 31), true)));  // INT64_MAX
+i1 = $long(0, (1 << 31), true); // INT64_MIN
 $print($lcntl(i1), $lcntl(i1, $long.toNumber));
 
 i1 = $long("-1");
-i2 = $long([$lcntl(i1, $long.low32), $lcntl(i1, $long.high32)], true);
+i2 = $long($lcntl(i1, $long.low32), $lcntl(i1, $long.high32), false);
 $print($lcntl(i1), $lcntl(i2));
 $print('isequal =', $lcntl(i1, $long.eq, i2));
 
@@ -65,8 +65,8 @@ $print($lcntl(i2), $lcntl(i3));
 
 //$print(123 << 32);
 
-function Long(x, unsigned) {
-    return $long(x, ~~unsigned);
+function Long(x, issigned) {
+    return $long(x, ~~issigned);
 }
 
 Long.prototype = $long(0).__proto__;

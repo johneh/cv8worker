@@ -94,15 +94,51 @@ static JsType ParseBuiltinType(const BuiltinType* bltIn) {
             return JsType::Uint;
         if (useLong)
             return JsType::Ulong;
+        return JsType::Double;
     case BuiltinType::LongLong:
+        if (useLong)
+            return JsType::Long;
+        return JsType::Double;
     case BuiltinType::ULongLong:
-    case BuiltinType::Float:
+        if (useLong)
+            return JsType::Ulong;
+        return JsType::Double;
+    case BuiltinType::Float:    // FIXME return JsType::Float
     case BuiltinType::Double:
         return JsType::Double;
     default: break;
     }
 
     ASSERT(0 && "Unhandled builtin type");
+}
+
+static char BuiltinCode(const BuiltinType* bltIn) {
+    switch(bltIn->getKind()) {
+    case BuiltinType::Bool:
+    case BuiltinType::SChar: /* signed char */
+        return 'b';
+    case BuiltinType::Char_S: /* char */
+        return 'b';
+    case BuiltinType::UChar:
+    case BuiltinType::Char_U:
+        return 'B';
+    case BuiltinType::Short:    return 'h';
+    case BuiltinType::UShort:   return 'H';
+    case BuiltinType::Int:  return 'i';
+    case BuiltinType::UInt: return 'I';
+    case BuiltinType::Long:
+        if (sizeof (long) == 4) return 'l';
+        return 'j';
+    case BuiltinType::ULong:
+        if (sizeof (unsigned long) == 4) return 'L';
+        return 'J';
+    case BuiltinType::LongLong: return 'j';
+    case BuiltinType::ULongLong:    return 'J';
+    case BuiltinType::Float:    return 'f';
+    case BuiltinType::Double:   return 'd';
+    default: break;
+    }
+    return (char) 0;
 }
 
 static JsType ParseType(QualType qType) {
@@ -524,6 +560,7 @@ private:
         return "";
     }
 
+#if 0
     CRecord *getEmbeddedRecord(FieldDecl *fieldDecl) {
         //  fieldDecl->getDeclName().dump();
         std::string rName;
@@ -560,6 +597,7 @@ private:
         cr->isanon = isAnonymous;
         return cr;
     }
+#endif
 
     std::string getFieldOffsets(RecordDecl *recDecl, const ASTRecordLayout &recLayout) {
         int fieldNo = 0;
@@ -573,27 +611,27 @@ private:
             // field->isUnnamedBitField()
             // field->getFieldIndex() == fieldNo
 
-            CRecord *cr = getEmbeddedRecord(*field);
-            // if (! cr) ParseType(field->getType());
-            cr = nullptr;   // Avoid warning
-
             uint64_t offsetInBits = recLayout.getFieldOffset(fieldNo); // in bits
-            int offset = recDecl->getASTContext().toCharUnitsFromBits(
+            int tpOff = recDecl->getASTContext().toCharUnitsFromBits(
                                                 offsetInBits).getQuantity();
+
+            QualType fT = field->getType();
+            if (fT->isPointerType()) {
+                tpOff = ((int) 'p') << 16 | tpOff;
+            } else if (fT->isIntegerType() || fT->isFloatingType()) {
+                QualType cT = fT.getCanonicalType();    // from typedef
+                if (cT->getTypeClass() == Type::Builtin) {
+                    tpOff = ((int) BuiltinCode(cT->getAs<clang::BuiltinType>())) << 16 | tpOff;
+                } else if (cT->getTypeClass() == Type::Enum) {
+                    tpOff = ((int) 'i') | tpOff;
+                }
+            }
+
+
             if (fieldNo > 0)
                 s += ", ";
 
             std::string fieldName = field->getNameAsString();
-#if 0
-            if (fieldName == "") {
-                // Embedded anonymous union without a field name.
-                // struct { ..; union { int i; double d; }; .. }
-                if (cr) {
-                    // Using the generarted union name as the identifier
-                    fieldName = cr->recName;
-                }
-            }
-#endif
             if (fieldName == "") {
                 // Embedded anonymous union without a field name.
                 // struct { ..; union { int i; double d; }; .. }
@@ -611,7 +649,7 @@ private:
 
             s += fieldName;
             s += " : ";
-            s += std::to_string(offset);
+            s += std::to_string(tpOff);
         }
         return s + " }";
     }

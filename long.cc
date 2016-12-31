@@ -86,7 +86,7 @@ int LongValue(v8Value v, long64 *l) {
 }
 
 enum LongCmd {
-    LONG_ISINT = 1,
+    LONG_ISLONG = 1,
     LONG_ISUINT,
     LONG_TOSTRING,
     LONG_TONUMBER,
@@ -112,8 +112,8 @@ static struct lcmd_s {
     char *name;
     enum LongCmd cmd;
 } long_cmds[] = {
-    { (char *) "isInt64", LONG_ISINT },
-    { (char *) "isUint64", LONG_ISUINT },
+    { (char *) "isLong", LONG_ISLONG },
+    { (char *) "isUnsigned", LONG_ISUINT },
     { (char *) "toString", LONG_TOSTRING },
     { (char *) "toNumber", LONG_TONUMBER },
     { (char *) "low32", LONG_LOW32 },
@@ -221,8 +221,9 @@ void LongCntl(const v8::FunctionCallbackInfo<v8::Value>& args) {
                     isolate->GetCurrentContext()).ToLocalChecked()->Value());
     }
     long64 i1;
-    if (!LongValue(args[0], &i1)) {
-        if (argc > 1 && (cmd == LONG_ISINT || cmd == LONG_ISUINT)) {
+    bool isLong = LongValue(args[0], &i1);
+    if (!isLong && cmd != LONG_ISLONG) {
+        if (/*argc > 1 &&*/ cmd == LONG_ISUINT) {
             args.GetReturnValue().Set(v8::False(isolate));
             return;
         }
@@ -230,8 +231,8 @@ void LongCntl(const v8::FunctionCallbackInfo<v8::Value>& args) {
     }
 
     switch (cmd) {
-    case LONG_ISINT:
-        args.GetReturnValue().Set(Boolean::New(isolate, i1.issigned));
+    case LONG_ISLONG:
+        args.GetReturnValue().Set(Boolean::New(isolate, isLong));
         break;
     case LONG_ISUINT:
         args.GetReturnValue().Set(Boolean::New(isolate, !i1.issigned));
@@ -346,9 +347,65 @@ void LongCntl(const v8::FunctionCallbackInfo<v8::Value>& args) {
     }
 }
 
-// $long("string")
-// $long(number)
-// $long([signed 32-bit low, high])
+// $long(string|number, issigned = true)
+// $long(signed 32-bit low, signed 32-bit high, issigned)
+// $long(object, ..) -> 0
+static void Long(const v8::FunctionCallbackInfo<v8::Value>& args) {
+    int argc = args.Length();
+    Isolate *isolate = args.GetIsolate();
+    v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
+    HandleScope handle_scope(isolate);
+    ThrowNotEnoughArgs(isolate, argc < 1);
+    v8Context context = isolate->GetCurrentContext();
+    int issigned = 1;
+    long64 i1;
+    i1.val.low = i1.val.high = 0;
+
+    if (argc >= 3) {
+        issigned = args[2]->BooleanValue(context).FromJust();
+        // Int32Value(object|NAN etc.) -> 0
+        // Int32Value('1') -> 1
+        i1.val.low = args[0]->Int32Value(context).FromJust();
+        i1.val.high = args[1]->Int32Value(context).FromJust();
+    } else {
+        if (argc > 1)
+            issigned = args[1]->BooleanValue(context).FromJust();
+        if (LongValue(args[0], &i1) && (i1.issigned == issigned)) {
+            args.GetReturnValue().Set(args[0]);
+            return;
+        }
+        if (args[0]->IsNumber()) {
+            double d = args[0]->NumberValue(context).FromJust();
+            if (isfinite(d)) {
+                if (issigned)
+                    i1.val.i64 = d;
+                else
+                    i1.val.u64 = d;
+            }
+        } else {
+            v8String s = args[0]->ToString(context).ToLocalChecked();
+            String::Utf8Value stval(s);
+            if (*stval) {
+                errno = 0;
+                if (issigned) {
+                    i1.val.i64 = (int64_t) strtoll(*stval, nullptr, 0);
+                    if (errno != 0)
+                        i1.val.i64 = 0;
+                } else {
+                    i1.val.u64 = (uint64_t) strtoull(*stval, nullptr, 0);
+                    if (errno != 0)
+                        i1.val.u64 = 0;
+                }
+            }
+        }
+    }
+    if (issigned)
+        args.GetReturnValue().Set(Int64(vm, i1.val.i64));
+    else
+        args.GetReturnValue().Set(UInt64(vm, i1.val.u64));
+}
+
+#if 0
 static void Long(const v8::FunctionCallbackInfo<v8::Value>& args) {
     int argc = args.Length();
     Isolate *isolate = args.GetIsolate();
@@ -358,16 +415,20 @@ static void Long(const v8::FunctionCallbackInfo<v8::Value>& args) {
     v8Context context = isolate->GetCurrentContext();
     bool issigned = true;
     if (argc > 1)
-        issigned = !args[1]->BooleanValue(context).FromJust();
+        issigned = args[1]->BooleanValue(context).FromJust();
 
     long64 i1;
     i1.val.low = i1.val.high = 0;
     if (args[0]->IsObject()) {  // likely array
         v8Object obj = v8Object::Cast(args[0]);
-        i1.val.low = obj->Get(context, 0).ToLocalChecked()
+        if (obj->IsArray()) {
+            // Int32Value(object|NAN etc.) -> 0
+            // Int32Value('1') -> 1
+            i1.val.low = obj->Get(context, 0).ToLocalChecked()
                         ->Int32Value(context).FromJust();
-        i1.val.high = obj->Get(context, 1).ToLocalChecked()
+            i1.val.high = obj->Get(context, 1).ToLocalChecked()
                         ->Int32Value(context).FromJust();
+        }
     } else if (args[0]->IsNumber()) {
         double d = args[0]->NumberValue(context).FromJust();
         if (isfinite(d)) {
@@ -397,6 +458,7 @@ static void Long(const v8::FunctionCallbackInfo<v8::Value>& args) {
     else
         args.GetReturnValue().Set(UInt64(vm, i1.val.u64));
 }
+#endif
 
 Local<FunctionTemplate> LongTemplate(v8_state vm) {
     Isolate *isolate = vm->isolate;

@@ -914,6 +914,16 @@ static void v8_to_ctype(v8_state vm, v8Value v, v8_val *ctval) {
         ctval->hndle = NewPersister(vm, v);
         ctval->ptr = v8External::Cast(
                 v8Object::Cast(v)->GetInternalField(1))->Value();
+    } else if (v->IsArrayBufferView()) {
+        // TypedArray and DataView
+        ctval->type = V8_CTYPE_PTR;
+        ctval->hndle = NewPersister(vm, v);
+        v8ArrayBufferView av = v8ArrayBufferView::Cast(v);
+        ctval->ptr = (char *)av->Buffer()->GetContents().Data() + av->ByteOffset();
+    } else if (v->IsArrayBuffer()) {
+        ctval->type = V8_CTYPE_PTR;
+        ctval->hndle = NewPersister(vm, v);
+        ctval->ptr = v8ArrayBuffer::Cast(v)->GetContents().Data();
     } else if (v->IsBoolean()) {
         ctval->type = V8_CTYPE_DOUBLE;
         ctval->d = (double) Local<Boolean>::Cast(v)->Value();
