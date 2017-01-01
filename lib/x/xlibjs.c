@@ -1,5 +1,6 @@
 #include "jsv8dlfn.h"
 #include <X11/Xlib.h>
+#include <X11/Xutil.h>  // XLookupString
 
 static v8_val do__Xmblen(v8_state vm, int argc, v8_val argv[]) {
 char *p0 = V8_TOSTR(argv[0]);
@@ -3000,6 +3001,17 @@ uint64_t r = (uint64_t) DefaultColormap(p0,p1);
 return V8_ULONG(r);
 }
 
+// actually in Xutil.h
+static v8_val do_XLookupString(v8_state vm, int argc, v8_val argv[]) {
+void *p0 = V8_TOPTR(argv[0]);
+char *p1 = V8_TOSTR(argv[1]);
+int p2 = V8_TOINT32(argv[2]);
+void *p3 = V8_TOPTR(argv[3]);
+void *p4 = V8_TOPTR(argv[4]);
+int r = (int) XLookupString(p0,p1,p2,p3,p4);
+return V8_INT32(r);
+}
+
 static v8_ffn fntab_[] = {
 { 2, do__Xmblen, "_Xmblen"},
 { 2, do_XLoadQueryFont, "XLoadQueryFont"},
@@ -3406,6 +3418,7 @@ static v8_ffn fntab_[] = {
 { 2, do_WhitePixel, "WhitePixel"},
 { 1, do_ConnectionNumber, "ConnectionNumber"},
 { 2, do_DefaultColormap, "DefaultColormap"},
+{ 5, do_XLookupString, "XLookupString"},
 {0}
 };
 static const char source_str_[] = "(function(){\

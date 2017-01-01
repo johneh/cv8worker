@@ -19,6 +19,17 @@ function makeWindow(circle) {
         console.log('Destroyed window:', ev.window);
     });
 
+    w1.addEventListener(XEvent.MotionNotify, function(ev) {
+        console.log(ev.get('x'), ev.get('y'));
+    });
+
+    w1.addEventListener(XEvent.KeyPress, function(ev) {
+        const ch = ev.lookupChar();
+        console.log("Key pressed =", ch);
+        if (ch === 'q')
+            this.destroy();
+    });
+
     w1.background = '#ffffff';
     w1.onWMDelete(function(x) {
         console.log(x, 'onWMDelete ...');

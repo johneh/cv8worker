@@ -126,10 +126,10 @@ struct v8_fn_s {
 (arg.type == V8_CTYPE_PTR ? arg.ptr \
  : ({ jsv8->panic_(jsv8->errs_[V8_ERRPTR], __func__); NULL;}))
 
-/* Special case: _only_ accepts $nullptr for NULL */
+/* Special case: _only_ accepts $nullptr for NULL -- THIS IS INCONVINIENT*/
 #define V8_TOSTR(arg) \
 (arg.type == V8_CTYPE_STR ? arg.stp \
- : (arg.type == V8_CTYPE_PTR && !arg.ptr) ? NULL \
+ : (arg.type == V8_CTYPE_PTR /*&& !arg.ptr*/) ? arg.ptr \
  : ({ jsv8->panic_(jsv8->errs_[V8_ERRSTR], __func__); NULL;}))
 
 #define V8_TOLONG(arg) \
