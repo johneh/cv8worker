@@ -127,14 +127,14 @@ struct Go_s {
     v8_val crval;
 };
 
-static v8Object NewGo(v8_state vm, void *fptr) {
+static v8Object WrapGo(v8_state vm, v8_ffn *fndef) {
     Isolate *isolate = vm->isolate;
     EscapableHandleScope handle_scope(isolate);
     v8ObjectTemplate templ = v8ObjectTemplate::New(isolate, vm->go_template);
     v8Object obj = templ->NewInstance(
                         isolate->GetCurrentContext()).ToLocalChecked();
     SetObjectId(obj, V8GO);
-    obj->SetInternalField(1, External::New(isolate, fptr));
+    obj->SetInternalField(1, External::New(isolate, fndef));
     // The rest of the internal fields are "Undefined".
     return handle_scope.Escape(obj);
 }
@@ -155,8 +155,8 @@ static v8Object CloneGo(v8_state vm, v8Object cr1) {
     Isolate *isolate = vm->isolate;
     v8Context context = isolate->GetCurrentContext();
     EscapableHandleScope handle_scope(isolate);
-    v8Object cr2 = NewGo(vm,
-                    v8External::Cast(cr1->GetInternalField(1))->Value());
+    v8Object cr2 = WrapGo(vm, reinterpret_cast<v8_ffn *>(
+                    v8External::Cast(cr1->GetInternalField(1))->Value()));
     v8Array props1 = cr1->GetOwnPropertyNames(context).ToLocalChecked();
     unsigned num_props1 = props1->Length();
     for (unsigned i = 0; i < num_props1; i++) {
@@ -248,8 +248,9 @@ static void Go(const FunctionCallbackInfo<Value>& args) {
 
     cr->SetInternalField(3, args[1]);   // input
 
-    g->fp = reinterpret_cast<Fngo>(
+    v8_ffn *fndef = reinterpret_cast<v8_ffn *>(
                     v8External::Cast(cr->GetInternalField(1))->Value());
+    g->fp = reinterpret_cast<Fngo>(fndef->fp);
 
     cr->SetAlignedPointerInInternalField(1, g); // overwrite field #1
 
@@ -375,15 +376,6 @@ static void MakeGoTemplate(v8_state vm) {
     v8ObjectTemplate templ = ObjectTemplate::New(isolate);
     templ->SetInternalFieldCount(GOROUTINE_INTERNAL_FIELD_COUNT);
     vm->go_template.Reset(isolate, templ);
-}
-
-static v8_val v8_go(v8_state vm, Fngo fptr) {
-    Isolate *isolate = vm->isolate;
-    LOCK_SCOPE(isolate)
-    v8Context context = v8Context::New(isolate, vm->context);
-    Context::Scope context_scope(context);
-    v8Value gObj = NewGo(vm, reinterpret_cast<void *>(fptr));
-    return ctype_handle(NewPersister(vm, gObj));
 }
 
 static int v8_goresolve(v8_state vm, v8_val crval,
@@ -602,7 +594,7 @@ static void CallForeignFunc(
     if (argc > MAXARGS || argc != func_wrap->pcount)
         ThrowError(isolate, "C-function called with incorrect # of arguments");
 
-    assert(func_wrap->flags & V8_CFUNC);
+    assert(func_wrap->type == FN_CTYPE);
 
     v8_val ctvals[MAXARGS];
     for (int i = 0; i < argc; i++) {
@@ -1284,13 +1276,16 @@ static int v8_seti(v8_state vm, v8_val hobj,
 }
 
 // Import a C function.
-v8_val v8_cfunc(v8_state vm, const v8_ffn *func_item) {
+static v8_val v8_cfunc(v8_state vm, const v8_ffn *func_item) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate);
     v8Context context = v8Context::New(isolate, vm->context);
     Context::Scope context_scope(context);
-    ((v8_ffn *) func_item)->flags = V8_CFUNC;
-    v8Object fnObj = WrapFunc(vm, (v8_ffn *) func_item);
+    v8Object fnObj;
+    if (func_item->type == FN_CTYPE)
+        fnObj = WrapFunc(vm, (v8_ffn *) func_item);
+    else
+        fnObj = WrapGo(vm, (v8_ffn *) func_item);
     return ctype_handle(NewPersister(vm, fnObj));
 }
 
@@ -1511,7 +1506,7 @@ void Gc(const FunctionCallbackInfo<Value>& args) {
                         v8Object::Cast(args[0])->GetInternalField(1)
                     )->Value()
             );
-        if ((func_item->flags & V8_CFUNC) && func_item->pcount == 1) {
+        if ((func_item->type == FN_CTYPE) && func_item->pcount == 1) {
             WeakPtr *w = new WeakPtr;
             w->vm = vm;
             w->ptr = ptr;
@@ -1551,7 +1546,7 @@ static struct v8_fn_s v8fns = {
     v8_byteoffset, /* ArrayBufferView */
     v8_buffer,
     v8_reset,
-    v8_go,
+    v8_cfunc,
     v8_goresolve,
     v8_goreject,
     v8_callstr,
@@ -1613,10 +1608,9 @@ static void Load(const FunctionCallbackInfo<Value>& args) {
     }
     for (int i = 0; i < nfunc && functab[i].name; i++) {
         v8Object fnObj;
-        if (functab[i].flags & V8_DLCORO) {
-            fnObj = NewGo(vm, functab[i].fp);
+        if (functab[i].type != FN_CTYPE) {
+            fnObj = WrapGo(vm, &functab[i]);
         } else {
-            functab[i].flags = V8_CFUNC;
             fnObj = WrapFunc(vm, &functab[i]);
         }
         o1->Set(context,

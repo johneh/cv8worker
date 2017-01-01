@@ -50,10 +50,28 @@ v8_val ff_isfile(v8_state vm, int argc, v8_val argv[]) {
     return V8_INT32(ret);
 }
 
+coroutine void set_timeout(v8_state vm, v8_val cr, void *p1) {
+    int64_t delay = *((int64_t *) p1);
+    mill_sleep(now()+delay);
+    jsv8->goresolve(vm, cr, NULL, 0, 1);
+}
+
+// POLLIN only. FIXME
+coroutine void do_fdevent(v8_state vm, v8_val cr, void *ptr) {
+    int fd = *((int *) ptr);
+    int ret = mill_fdevent(fd, FDW_IN, -1);
+    if (ret != FDW_IN)
+        jsv8->goreject(vm, cr, strerror(EIO));
+    else
+        jsv8->goresolve(vm, cr, NULL, 0, 1);
+}
+
 static v8_ffn ff_table[] = {
-    { 1, ff_readfile, "readFile" },
-    { 1, ff_realpath, "realPath" },
-    { 1, ff_isfile, "isRegularFile" },
+    { 1, ff_readfile, "readFile", FN_CTYPE },
+    { 1, ff_realpath, "realPath", FN_CTYPE },
+    { 1, ff_isfile, "isRegularFile", FN_CTYPE },
+    { 0, set_timeout, "msleep", FN_CORO },
+    { 0, do_fdevent, "fdevent", FN_CORO },
 };
 
 /* Return an object with the exported C functions */
@@ -62,7 +80,7 @@ v8_val exports(v8_state vm) {
     int n = sizeof (ff_table) / sizeof (ff_table[0]);
     v8_val h1 = jsv8->object(vm);
     for (i = 0; i < n; i++) {
-        v8_val f1 = v8_cfunc(vm, &ff_table[i]);
+        v8_val f1 = jsv8->cfunc(vm, &ff_table[i]);
         jsv8->set(vm, h1, ff_table[i].name, f1);
         jsv8->reset(vm, f1);
     }
@@ -88,21 +106,6 @@ v8_val parse_args(v8_state vm, int argc, char **argv, char **path) {
     return hargs;
 }
 
-coroutine void set_timeout(v8_state vm, v8_val cr, void *p1) {
-    int64_t delay = *((int64_t *) p1);
-    mill_sleep(now()+delay);
-    jsv8->goresolve(vm, cr, NULL, 0, 1);
-}
-
-// POLLIN only. FIXME
-coroutine void do_fdevent(v8_state vm, v8_val cr, void *ptr) {
-    int fd = *((int *) ptr);
-    int ret = mill_fdevent(fd, FDW_IN, -1);
-    if (ret != FDW_IN)
-        jsv8->goreject(vm, cr, strerror(EIO));
-    else
-        jsv8->goresolve(vm, cr, NULL, 0, 1);
-}
 
 #if 0
 int finished = 0;
@@ -154,14 +157,6 @@ int main(int argc, char **argv) {
 
     v8_val htmp = V8_STR(libpath, strlen(libpath));
     jsv8->set(vm, loader, "path", htmp);
-    jsv8->reset(vm, htmp);
-
-    htmp = jsv8->goroutine(vm, set_timeout);
-    jsv8->set(vm, loader, "msleep", htmp);
-    jsv8->reset(vm, htmp);
-
-    htmp = jsv8->goroutine(vm, do_fdevent);
-    jsv8->set(vm, loader, "fdevent", htmp);
     jsv8->reset(vm, htmp);
 
     char *mainpath = strdup(libpath);

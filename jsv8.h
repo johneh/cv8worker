@@ -23,6 +23,4 @@ extern int v8_gc(v8_state vm);
 
 extern v8_val v8_getbuffer(v8_state vm, v8_val val); /* argument: TypedArray */
 
-extern v8_val v8_cfunc(v8_state vm, const v8_ffn *func_item);
-
 #endif

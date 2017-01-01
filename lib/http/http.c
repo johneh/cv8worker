@@ -1011,17 +1011,17 @@ do_http_listen_and_accept(v8_state vm, v8_val cr, void *ptr) {
 }
 
 static v8_ffn ff_table[] = {
-    {4, do_http_create, "create", V8_CFUNC },
-    {1, do_http_free, "free", V8_CFUNC },
-    {1, do_http_close, "closefd", V8_CFUNC},
-    {2, do_http_set_deadline, "set_deadline", V8_CFUNC},
-    {0, do_http_connect, "connect", V8_DLCORO },
-    {0, do_http_send, "send", V8_DLCORO },
-    {0, do_http_header, "header", V8_DLCORO },
-    {0, do_http_reada, "reada", V8_DLCORO },
-    {0, do_http_readp, "readp", V8_DLCORO },
-    {0, do_http_readb, "readb", V8_DLCORO },
-    {0, do_http_listen_and_accept, "listen_and_accept", V8_DLCORO },
+    {4, do_http_create, "create", FN_CTYPE },
+    {1, do_http_free, "free", FN_CTYPE },
+    {1, do_http_close, "closefd", FN_CTYPE },
+    {2, do_http_set_deadline, "set_deadline", FN_CTYPE },
+    {0, do_http_connect, "connect", FN_CORO },
+    {0, do_http_send, "send", FN_CORO },
+    {0, do_http_header, "header", FN_CORO },
+    {0, do_http_reada, "reada", FN_CORO },
+    {0, do_http_readp, "readp", FN_CORO },
+    {0, do_http_readb, "readb", FN_CORO },
+    {0, do_http_listen_and_accept, "listen_and_accept", FN_CORO },
     {0},
 };
 

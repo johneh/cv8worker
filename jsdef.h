@@ -54,13 +54,12 @@ typedef struct v8_ffn_s {
     int pcount;
     void *fp;
     const char *name;
-    int flags;
+    int type;
 
-/* Fngo */
-#define V8_DLCORO   (1 << 1)
-
-/* FnCtype */
-#define V8_CFUNC   (1 << 2)
+#define FN_CTYPE    0
+#define FN_CORO     1
+#define FN_COROPULL 2
+#define FN_COROPUSH 3
 } v8_ffn;
 
 
@@ -81,7 +80,7 @@ struct v8_fn_s {
 
     void (*reset)(v8_state vm, v8_val val);
 
-    v8_val (*goroutine)(v8_state, Fngo);
+    v8_val (*cfunc)(v8_state, const v8_ffn *);
     /* if length > 0, data memory is owned by V8 and must be
      * compatible with C free() */
     int (*goresolve)(v8_state, v8_val, volatile void *ptr,
