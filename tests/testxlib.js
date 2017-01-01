@@ -4,6 +4,7 @@ const Window = require('../lib/xlib.js').Window;
 function makeWindow(circle) {
     const w1 = new Window();
     w1.create(null, 0, 0, 250, 250);
+    w1.setTitle('Hello World!');
     const gc = w1.createGC();
     gc.set('foreground', "red");
     gc.set('line_width', 2);
