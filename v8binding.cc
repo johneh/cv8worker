@@ -159,7 +159,7 @@ static v8Object ToGo(v8Value v) {
 coroutine static void start_go(mill_pipe inq) {
     while (true) {
         int done;
-        Go_s *g = *((Go_s **) mill_piperecv(inq, &done));
+        struct Go_s *g = *((struct Go_s **) mill_piperecv(inq, &done));
         if (done)
             break;
         go(((Fngo)g->fndef->fp)(g->vm, g, g->argc, g->args));
@@ -184,10 +184,22 @@ coroutine static void recv_go(v8_state vm) {
 static void send_go(v8_state vm, Go_s *g) {
     int rc = mill_pipesend(vm->inq, (void *) &g);
     if (rc == -1) {
-        fprintf(stderr, "v8binding.c: send_go() failed\n");
+        fprintf(stderr, "v8binding.cc:send_go(): writing to pipe failed\n");
         Panic(strerror(errno));
     }
 }
+
+static int v8_goresolve(v8_state vm, v8_coro cr, v8_val data, int done);
+
+// goroutine wpapper for a C-type function running in non-V8 thread
+// N.B.: cannot reliably read errno set by the function.
+coroutine static void do_cgo(v8_state vm, v8_coro cr, int argc, v8_val args[]) {
+    FnCtype fp = (FnCtype) (((struct Go_s *) cr)->fp);
+    v8_val retv = fp(vm, argc, args);
+    v8_goresolve(vm, cr, retv, 1);
+}
+
+static v8_ffn cgodef = { 0, (void *) do_cgo, "__cgo__", FN_CORO };
 
 // $go(coro [, in1 [, in2 .. in12 ]])
 // $go(coro [, in1 [, in2 .. in12 ]], fn)
@@ -204,12 +216,23 @@ static void Go(const FunctionCallbackInfo<Value>& args) {
     int argc = args.Length();
     ThrowNotEnoughArgs(isolate, argc < 1);
     vm = reinterpret_cast<v8_state>(isolate->GetData(0));
+    v8_ffn *fndef;
 
     v8Object coro = ToGo(args[0]);
-    if (coro.IsEmpty())
-        ThrowTypeError(isolate, "$go argument #1: coroutine expected");
-    v8_ffn *fndef = reinterpret_cast<v8_ffn *>(
+    if (coro.IsEmpty()) {
+        if (GetObjectId(vm, args[0]) != V8EXTFUNC)
+            ThrowTypeError(isolate, "$go argument #1: coroutine expected");
+        // use the do_cgo wrapper to run in the other thread.
+        fndef = reinterpret_cast<v8_ffn *>(
+                    v8External::Cast(
+                        v8Object::Cast(args[0])->GetInternalField(1)
+                    )->Value()
+            );
+    } else {
+        fndef = reinterpret_cast<v8_ffn *>(
             v8External::Cast(coro->GetInternalField(1))->Value());
+    }
+
     if (fndef->type == FN_COROPUSH) {
         if (argc < 2 || !args[argc-1]->IsFunction())
             ThrowTypeError(isolate,
@@ -232,7 +255,12 @@ static void Go(const FunctionCallbackInfo<Value>& args) {
 
     if (fndef->type == FN_COROPUSH)
         g->hcb = NewPersister(vm, args[argc+1]);
-    g->fndef = fndef;
+    if (fndef->type == FN_CTYPE) {
+        g->fp = fndef->fp;
+        g->fndef = &cgodef;
+    } else
+        g->fndef = fndef;
+
     Local<v8::Promise::Resolver> pr = Promise::Resolver::New(
                 isolate->GetCurrentContext()).ToLocalChecked();
 
@@ -295,16 +323,17 @@ static bool RunGoCallback(v8_state vm, GoCallback *cb) {
     if (retv.IsEmpty()) // invalid persistent handle
         Panic("$go: received invalid resolve value");
 
-    if (fndef->type != FN_COROPUSH) {
-        if (fndef->type == FN_COROPULL) {
-            /* "Pull" stream */
-            v8Object robj = Object::New(isolate);
-            robj->Set(context, v8STR(isolate, "done"),
+    if (fndef->type == FN_CORO) {
+        ResolveGo(isolate, g, retv);
+        return FinishGo(vm, cb);
+    }
+    if (fndef->type == FN_COROPULL) {
+        /* "Pull" stream */
+        v8Object robj = Object::New(isolate);
+        robj->Set(context, v8STR(isolate, "done"),
                     Boolean::New(isolate, cb->flags & GoDone));
-            robj->Set(context, v8STR(isolate, "value"), retv);
-            ResolveGo(isolate, g, robj);
-        } else
-            ResolveGo(isolate, g, retv);
+        robj->Set(context, v8STR(isolate, "value"), retv);
+        ResolveGo(isolate, g, robj);
         return FinishGo(vm, cb);
     }
 

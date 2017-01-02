@@ -52,10 +52,10 @@ pointjs.c: $(TOPDIR)/tools/gencode.cc
 	$(TOPDIR)/tools/gencode point.h -- > $@
 
 pointjs.o: $(TOPDIR)/jsv8.h $(TOPDIR)/jsv8dlfn.h pointjs.c
-	$(CC) $(SO_CFLAGS) pointjs.c
+	$(CC) $(SO_CFLAGS) -I$(MILL_INCLUDES) pointjs.c
 
 libpointjs.so: pointjs.o
-	$(CC) $(SO_LDFLAGS) $^ -o $@
+	$(CC) $(SO_LDFLAGS) $^ -o $@  $(MILL_LIBS)
 
 clean:
 	rm -f *.o
