@@ -9,6 +9,7 @@ enum v8_ctype {
     V8_CTYPE_DOUBLE,
     V8_CTYPE_STR,
     V8_CTYPE_PTR,
+    V8_CTYPE_BUFFER,
     V8_CTYPE_LONG,  /* from Long object */
     V8_CTYPE_ULONG,    /* from Long object */
     V8_CTYPE_HANDLE,
@@ -144,7 +145,7 @@ struct v8_fn_s {
 : ({ jsv8->panic_(jsv8->errs_[V8_ERRHANDLE], __func__); 0;}))
 
 
-/* void return - undef in js */
+/* void return - undefined in JS */
 #define V8_VOID (v8_val) { .type = V8_CTYPE_VOID }
 
 #define V8_INT32(i_) (v8_val) { .i32 = i_, .type = V8_CTYPE_INT32 }
@@ -154,8 +155,12 @@ struct v8_fn_s {
 #define V8_LONG(l_) (v8_val) { .i64 = l_, .type = V8_CTYPE_LONG }
 #define V8_ULONG(ul_) (v8_val) { .u64 = ul_, .type = V8_CTYPE_ULONG }
 
-/* pointer _must_ not be the result of V8_TOSTR() */
-#define V8_PTR(p_) (v8_val) { .ptr = p_, .type = V8_CTYPE_PTR }
+/* V8 owns the Buffer memory. If pointer p_ is not NULL, it must be
+ * compatible with ArrayBuffer::Allocator::Free. */
+#define V8_BUFFER(p_, l_) { .ptr = p_, .hndle = (v8_handle) l_, .type = V8_CTYPE_BUFFER }
+
+/* pointer _must_ not be from V8_TOSTR() or V8_TOPTR() */
+#define V8_PTR(p_) (v8_val) { .ptr = p_, .hndle = 0, .type = V8_CTYPE_PTR }
 
 /* string copied */
 #define V8_STR(s_, l_)    jsv8->ctypestr_(s_, l_)

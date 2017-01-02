@@ -609,6 +609,7 @@ static void CallForeignFunc(
     }
     isolate->Enter();
     for (int i = 0; i < argc; i++) {
+        // TODO: if retval.ptr == one in arguments for type V8_CTPE_PTR, BUFFER 
         v8_reset(vm, ctvals[i]);
     }
     v8Value retv = ctype_to_v8(vm, &retval);
@@ -952,6 +953,15 @@ static v8Value ctype_to_v8(v8_state vm, v8_val *ctval) {
         if (!ctval->ptr)
             return GetValueFromPersister(vm, NULLPTR_HANDLE);
         return WrapPtr(vm, ctval->ptr);
+    case V8_CTYPE_BUFFER: {
+        void *ptr = ctval->ptr;
+        unsigned byte_length = (unsigned) ctval->hndle;
+        if (ptr) {
+            return ArrayBuffer::New(vm->isolate, ptr, byte_length,
+                        v8::ArrayBufferCreationMode::kInternalized);
+        }
+        return ArrayBuffer::New(vm->isolate, byte_length);
+    }
     case V8_CTYPE_LONG:
         return Int64(vm, ctval->i64);
     case V8_CTYPE_ULONG:
