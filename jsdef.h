@@ -45,11 +45,11 @@ struct js_vm_s;
 typedef struct js_vm_s js_vm;
 typedef js_vm *v8_state;
 
-typedef void (*Fngo)(v8_state, v8_val, void *);
-
 typedef void (*Fnfree)(void *ptr);
-
 typedef v8_val (*FnCtype)(v8_state, int, v8_val []);
+
+typedef void *v8_coro;
+typedef void (*Fngo)(v8_state, v8_coro, int, v8_val []);
 
 typedef struct v8_ffn_s {
     int pcount;
@@ -82,11 +82,8 @@ struct v8_fn_s {
     void (*reset)(v8_state vm, v8_val val);
 
     v8_val (*cfunc)(v8_state, const v8_ffn *);
-    /* if length > 0, data memory is owned by V8 and must be
-     * compatible with C free() */
-    int (*goresolve)(v8_state, v8_val, volatile void *ptr,
-            int length, int done);
-    int (*goreject)(v8_state, v8_val, const char *);
+    int (*goresolve)(v8_state, v8_coro, v8_val, int done);
+    int (*goreject)(v8_state, v8_coro, const char *);
 
     v8_val (*callstr)(v8_state vm, const char *source,
             v8_val hself, int nargs, v8_val *args);
@@ -157,7 +154,8 @@ struct v8_fn_s {
 
 /* V8 owns the Buffer memory. If pointer p_ is not NULL, it must be
  * compatible with ArrayBuffer::Allocator::Free. */
-#define V8_BUFFER(p_, l_) { .ptr = p_, .hndle = (v8_handle) l_, .type = V8_CTYPE_BUFFER }
+#define V8_BUFFER(p_, l_) \
+(v8_val) { .ptr = p_, .hndle = (v8_handle) l_, .type = V8_CTYPE_BUFFER }
 
 /* pointer _must_ not be from V8_TOSTR() or V8_TOPTR() */
 #define V8_PTR(p_) (v8_val) { .ptr = p_, .hndle = 0, .type = V8_CTYPE_PTR }

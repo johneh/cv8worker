@@ -50,28 +50,28 @@ v8_val ff_isfile(v8_state vm, int argc, v8_val argv[]) {
     return V8_INT32(ret);
 }
 
-coroutine void set_timeout(v8_state vm, v8_val cr, void *p1) {
-    int64_t delay = *((int64_t *) p1);
+coroutine void set_timeout(v8_state vm, v8_coro cr, int argc, v8_val args[]) {
+    uint32_t delay = V8_TOUINT32(args[0]);
     mill_sleep(now()+delay);
-    jsv8->goresolve(vm, cr, NULL, 0, 1);
+    jsv8->goresolve(vm, cr, V8_VOID, 1);
 }
 
 // POLLIN only. FIXME
-coroutine void do_fdevent(v8_state vm, v8_val cr, void *ptr) {
-    int fd = *((int *) ptr);
+coroutine void do_fdevent(v8_state vm, v8_coro cr, int argc, v8_val args[]) {
+    int fd = V8_TOINT32(args[0]);
     int ret = mill_fdevent(fd, FDW_IN, -1);
     if (ret != FDW_IN)
         jsv8->goreject(vm, cr, strerror(EIO));
     else
-        jsv8->goresolve(vm, cr, NULL, 0, 1);
+        jsv8->goresolve(vm, cr, V8_VOID, 1);
 }
 
 static v8_ffn ff_table[] = {
     { 1, ff_readfile, "readFile", FN_CTYPE },
     { 1, ff_realpath, "realPath", FN_CTYPE },
     { 1, ff_isfile, "isRegularFile", FN_CTYPE },
-    { 0, set_timeout, "msleep", FN_CORO },
-    { 0, do_fdevent, "fdevent", FN_CORO },
+    { 1, set_timeout, "msleep", FN_CORO },
+    { 1, do_fdevent, "fdevent", FN_CORO },
 };
 
 /* Return an object with the exported C functions */

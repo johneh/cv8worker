@@ -85,6 +85,7 @@ static void v8_to_ctype(v8_state vm, v8Value v, v8_val *ctval);
 static v8Value ctype_to_v8(v8_state vm, v8_val *ctval);
 static v8_val ctype_handle(v8_handle h);
 static void v8_reset(v8_state vm, v8_val val);
+static v8_val v8_ctypestr(const char *stp, unsigned stlen);
 
 static int SetFinalizer(v8_state vm, v8Object ptrObj, Fnfree free_func);
 
@@ -105,26 +106,30 @@ static void Panic(const char *errstr) {
 }
 
 ////////////////////////////////// Coroutine //////////////////////////////////
-#define GOROUTINE_INTERNAL_FIELD_COUNT 5
+
+#define GOROUTINE_INTERNAL_FIELD_COUNT 2
 enum {
     GoDone = (1 << 0),
     GoResolve = (1 << 1),
     GoReject = (1 << 2),
-    GoPull = (1 << 7),  /* "pull" stream */
 };
 
 struct GoCallback {
-    v8_handle h;
-    void *data;
-    int datalen;
+    v8_coro g;
+    v8_val result;
     int flags;
 };
 
 struct Go_s {
     v8_state vm;
-    Fngo fp;
-    void *inp;
-    v8_val crval;
+    v8_ffn *fndef;
+    union {
+        void *fp;
+        v8_handle hcb;
+    };
+    v8_handle hpr;  /* Promise Resolver */
+    int argc;
+    v8_val args[MAXARGS];
 };
 
 static v8Object WrapGo(v8_state vm, v8_ffn *fndef) {
@@ -135,7 +140,6 @@ static v8Object WrapGo(v8_state vm, v8_ffn *fndef) {
                         isolate->GetCurrentContext()).ToLocalChecked();
     SetObjectId(obj, V8GO);
     obj->SetInternalField(1, External::New(isolate, fndef));
-    // The rest of the internal fields are "Undefined".
     return handle_scope.Escape(obj);
 }
 
@@ -151,24 +155,6 @@ static v8Object ToGo(v8Value v) {
     return v8Object();  // Empty handle
 }
 
-static v8Object CloneGo(v8_state vm, v8Object cr1) {
-    Isolate *isolate = vm->isolate;
-    v8Context context = isolate->GetCurrentContext();
-    EscapableHandleScope handle_scope(isolate);
-    v8Object cr2 = WrapGo(vm, reinterpret_cast<v8_ffn *>(
-                    v8External::Cast(cr1->GetInternalField(1))->Value()));
-    v8Array props1 = cr1->GetOwnPropertyNames(context).ToLocalChecked();
-    unsigned num_props1 = props1->Length();
-    for (unsigned i = 0; i < num_props1; i++) {
-        v8Value property;
-        if (props1->Get(context, i).ToLocal(&property)) {
-            cr2->Set(context, property,
-                    cr1->Get(context, property).ToLocalChecked()).FromJust();
-        }
-    }
-    return handle_scope.Escape(cr2);
-}
-
 // Start a $go() coroutine in the main thread.
 coroutine static void start_go(mill_pipe inq) {
     while (true) {
@@ -176,7 +162,7 @@ coroutine static void start_go(mill_pipe inq) {
         Go_s *g = *((Go_s **) mill_piperecv(inq, &done));
         if (done)
             break;
-        go(g->fp(g->vm, g->crval, g->inp));
+        go(((Fngo)g->fndef->fp)(g->vm, g, g->argc, g->args));
     }
 }
 
@@ -203,7 +189,9 @@ static void send_go(v8_state vm, Go_s *g) {
     }
 }
 
-// $go(coro, input [, function(data) { .. }])
+// $go(coro [, in1 [, in2 .. in12 ]])
+// $go(coro [, in1 [, in2 .. in12 ]], fn)
+//   fn-> function(result, done (= true|false))
 static void Go(const FunctionCallbackInfo<Value>& args) {
     Go_s *g;
     v8_state vm;
@@ -214,77 +202,74 @@ static void Go(const FunctionCallbackInfo<Value>& args) {
     isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
     int argc = args.Length();
-    ThrowNotEnoughArgs(isolate, argc < 2);
-    vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
+    ThrowNotEnoughArgs(isolate, argc < 1);
+    vm = reinterpret_cast<v8_state>(isolate->GetData(0));
 
-    if ((GetObjectId(vm, args[1]) != V8EXTPTR) && !args[1]->IsArrayBuffer())
-        ThrowTypeError(isolate,
-                "$go argument #2: pointer or ArrayBuffer expected");
-    if (argc > 2 && !args[2]->IsFunction())
-        ThrowTypeError(isolate, "$go argument #3: function expected");
-    v8Object cr0 = ToGo(args[0]);
-    if (cr0.IsEmpty())
+    v8Object coro = ToGo(args[0]);
+    if (coro.IsEmpty())
         ThrowTypeError(isolate, "$go argument #1: coroutine expected");
+    v8_ffn *fndef = reinterpret_cast<v8_ffn *>(
+            v8External::Cast(coro->GetInternalField(1))->Value());
+    if (fndef->type == FN_COROPUSH) {
+        if (argc < 2 || !args[argc-1]->IsFunction())
+            ThrowTypeError(isolate,
+                "$go: callback (last argument) is not a function");
+        argc--;
+    }
 
-    v8Object cr = CloneGo(vm, cr0);
+    argc--;
+    if (argc > MAXARGS || argc != fndef->pcount)
+        ThrowError(isolate,
+                "$go: incorrect number of arguments for the goroutine");
+
     g = new Go_s;
     g->vm = vm;
-    vm->ncoro++;
-
-    if (args[1]->IsArrayBuffer())
-        g->inp = v8ArrayBuffer::Cast(args[1])->GetContents().Data();
-    else
-        g->inp = UnwrapPtr(v8Object::Cast(args[1]));
-
-    if (argc > 2) {
-        cr->SetInternalField(2, args[2]);   // callback
-    } else {
-        cr->SetInternalField(2, v8::Undefined(isolate));
+    g->hcb = 0;
+    g->argc = argc;
+    for (int i = 0; i < argc; i++) {
+        v8_to_ctype(vm, args[i+1], &g->args[i]);
     }
+
+    if (fndef->type == FN_COROPUSH)
+        g->hcb = NewPersister(vm, args[argc+1]);
+    g->fndef = fndef;
     Local<v8::Promise::Resolver> pr = Promise::Resolver::New(
                 isolate->GetCurrentContext()).ToLocalChecked();
-    cr->SetInternalField(4, pr);
+
     args.GetReturnValue().Set(pr->GetPromise());
 
-    cr->SetInternalField(3, args[1]);   // input
-
-    v8_ffn *fndef = reinterpret_cast<v8_ffn *>(
-                    v8External::Cast(cr->GetInternalField(1))->Value());
-    g->fp = reinterpret_cast<Fngo>(fndef->fp);
-
-    cr->SetAlignedPointerInInternalField(1, g); // overwrite field #1
-
-    g->crval = ctype_handle(NewPersister(vm, cr));
+    g->hpr = NewPersister(vm, pr);
+    vm->ncoro++;
 
     }   // end V8 scope
 
-    {
-    isolate->Exit();
-    v8::Unlocker unlocker(isolate);
     send_go(vm, g);
-    }
-    isolate->Enter();
 }
 
-static bool FinishGo(v8_state vm, v8Object cr, GoCallback *cb) {
+static bool FinishGo(v8_state vm, GoCallback *cb) {
     vm->ncoro--;
-    Go_s *g = reinterpret_cast<Go_s *>(
-                    cr->GetAlignedPointerFromInternalField(1));
-    vm->store_->Dispose(cb->h);
+    Go_s *g = reinterpret_cast<Go_s *>(cb->g);
+    for (int i = 0; i < g->argc; i++) {
+        v8_reset(vm, g->args[i]);
+    }
+    if (g->fndef->type == FN_COROPUSH)
+        vm->store_->Dispose(g->hcb);
+    v8_reset(vm, cb->result);
+    vm->store_->Dispose(g->hpr);
     delete g;
     delete cb;
     return true;
 }
 
-static inline void ResolveGo(Isolate *isolate, v8Object cr, v8Value val) {
-    Local<v8::Promise::Resolver>::Cast(cr->GetInternalField(4))
+static inline void ResolveGo(Isolate *isolate, Go_s *g, v8Value val) {
+    Local<v8::Promise::Resolver>::Cast(GetValueFromPersister(g->vm, g->hpr))
         -> Resolve(isolate->GetCurrentContext(), val).FromJust();
     // Empty the Microtask Work Queue.
     isolate->RunMicrotasks();
 }
 
-static inline void RejectGo(Isolate *isolate, v8Object cr, v8Value val) {
-    Local<v8::Promise::Resolver>::Cast(cr->GetInternalField(4))
+static inline void RejectGo(Isolate *isolate, Go_s *g, v8Value val) {
+    Local<v8::Promise::Resolver>::Cast(GetValueFromPersister(g->vm, g->hpr))
         -> Reject(isolate->GetCurrentContext(), val).FromJust();
     // Empty the Microtask Work Queue.
     isolate->RunMicrotasks();
@@ -296,74 +281,66 @@ static bool RunGoCallback(v8_state vm, GoCallback *cb) {
     // GetCurrentContext() is NULL if called from WaitFor().
     v8Context context = v8Context::New(isolate, vm->context);
     Context::Scope context_scope(context);
-
-    v8Object cr = ToGo(GetValueFromPersister(vm, cb->h));
-    if (cr.IsEmpty()) {
-        // Delayed validation of the v8_handle in goresolve/goreject call.
-        Panic("goresolve/goreject: invalid coroutine handle");
-    }
+    Go_s *g = reinterpret_cast<Go_s *>(cb->g);
+    v8_ffn *fndef = g->fndef;
 
     if (cb->flags & GoReject) {
-        char *message = reinterpret_cast<char *>(cb->data);
-        RejectGo(isolate, cr,
-                Exception::Error(v8STR(isolate, message)));
-        free(cb->data);
-        return FinishGo(vm, cr, cb);
+        char *message = cb->result.stp;
+        assert(message);
+        RejectGo(isolate, g, Exception::Error(v8STR(isolate, message)));
+        return FinishGo(vm, cb);
     }
 
-    v8Value callback = cr->GetInternalField(2);
-    if (!callback->IsFunction()) {
-        v8Object ptrObj = WrapPtr(vm, cb->data);
-        SetCtypeSize(ptrObj, cb->datalen);
-        if (cb->datalen > 0)
-            SetFinalizer(vm, ptrObj, free);
-        if (cb->flags & GoPull) {
+    v8Value retv = ctype_to_v8(vm, &cb->result);    // V8_VOID return -> JS undefined 
+    if (retv.IsEmpty()) // invalid persistent handle
+        Panic("$go: received invalid resolve value");
+
+    if (fndef->type != FN_COROPUSH) {
+        if (fndef->type == FN_COROPULL) {
             /* "Pull" stream */
             v8Object robj = Object::New(isolate);
             robj->Set(context, v8STR(isolate, "done"),
                     Boolean::New(isolate, cb->flags & GoDone));
-            robj->Set(context, v8STR(isolate, "value"), ptrObj);
-            ResolveGo(isolate, cr, robj);
+            robj->Set(context, v8STR(isolate, "value"), retv);
+            ResolveGo(isolate, g, robj);
         } else
-            ResolveGo(isolate, cr, ptrObj);
-        return FinishGo(vm, cr, cb);
+            ResolveGo(isolate, g, retv);
+        return FinishGo(vm, cb);
     }
+
+    assert(g->hcb);
 
     /* "Push" stream */
     TryCatch try_catch(isolate);
 
     bool done = (cb->flags & GoDone) != 0;
-    v8Object ptrObj = WrapPtr(vm, cb->data);
-    SetCtypeSize(ptrObj, cb->datalen);
-    if (cb->datalen > 0)
-        SetFinalizer(vm, ptrObj, free);
     v8Value args[2];
-    args[0] = ptrObj;
+    args[0] = retv;
     args[1] = Boolean::New(isolate, done);
 
-    assert(!try_catch.HasCaught());
-    v8Value result = v8Function::Cast(callback)
+    v8Value result = v8Function::Cast(GetValueFromPersister(vm, g->hcb))
                         ->Call(context->Global(), 2, args);
 
     if (done) {
         if (try_catch.HasCaught()) {
-            RejectGo(isolate, cr, Exception::Error(
+            RejectGo(isolate, g, Exception::Error(
                     v8STR(isolate, GetExceptionString(isolate, &try_catch))));
         } else {
             /* Using final return from the callback as the settled value */
-            ResolveGo(isolate, cr, result);
+            ResolveGo(isolate, g, result);
         }
-        return FinishGo(vm, cr, cb);
+        return FinishGo(vm, cb);
     }
 
-    /* swallow intermediate exceptions XXX ??  */
+    /* XXX: swallow intermediate exceptions !!! */
+    v8_reset(vm, cb->result);
     delete cb;
     return false;
 }
 
 static void WaitFor(v8_state vm) {
     while (vm->ncoro > 0) {
-        /*DPRINT("[[ WaitFor: %d unfinished coroutines. ]]\n", vm->ncoro);*/
+        /* fprintf(stderr, [[ WaitFor: %d unfinished coroutines. ]]\n", vm->ncoro);*/
         GoCallback *cb = chr(vm->ch, GoCallback *);
         assert(cb);
         RunGoCallback(vm, cb);
@@ -378,28 +355,22 @@ static void MakeGoTemplate(v8_state vm) {
     vm->go_template.Reset(isolate, templ);
 }
 
-static int v8_goresolve(v8_state vm, v8_val crval,
-        volatile void *data, int dalen, int done) {
-    if (crval.type != V8_CTYPE_HANDLE)
-        Panic("goresolve: argument #2 is not a goroutine");
+// called from non-V8 thread.
+static int v8_goresolve(v8_state vm, v8_coro cr, v8_val data, int done) {
     GoCallback *cb = new GoCallback;
-    cb->h = crval.hndle;    // Delay validating handle to avoid lock contention.
-    cb->data = const_cast<void *>(data);
-    cb->datalen = dalen;
-    cb->flags = (GoResolve|done);
-    // Coroutine is running in non-V8 thread.
+    cb->g = cr;
+    cb->result = data;
+    cb->flags = (GoResolve|!!done);
     int rc = mill_pipesend(vm->outq, &cb);
     assert(rc == 0);
     return (rc == 0);
 }
 
-static int v8_goreject(v8_state vm, v8_val crval, const char *message) {
-    if (crval.type != V8_CTYPE_HANDLE)
-        Panic("goreject: argument #2 is not a goroutine");
+// called from non-V8 thread.
+static int v8_goreject(v8_state vm, v8_coro cr, const char *message) {
     GoCallback *cb = new GoCallback;
-    cb->h = crval.hndle;    // Delay validating handle to avoid lock contention.
-    cb->data = reinterpret_cast<void *>(estrdup(message, strlen(message)));
-    cb->datalen = 0;
+    cb->g = cr;
+    cb->result = v8_ctypestr(message, strlen(message));
     cb->flags = GoReject;
     int rc = mill_pipesend(vm->outq, &cb);
     assert(rc == 0);
@@ -592,7 +563,7 @@ static void CallForeignFunc(
                 v8External::Cast(obj->GetInternalField(1))->Value());
     int argc = args.Length();
     if (argc > MAXARGS || argc != func_wrap->pcount)
-        ThrowError(isolate, "C-function called with incorrect # of arguments");
+        ThrowError(isolate, "C-type function: incorrect number of arguments");
 
     assert(func_wrap->type == FN_CTYPE);
 
@@ -609,7 +580,6 @@ static void CallForeignFunc(
     }
     isolate->Enter();
     for (int i = 0; i < argc; i++) {
-        // TODO: if retval.ptr == one in arguments for type V8_CTPE_PTR, BUFFER 
         v8_reset(vm, ctvals[i]);
     }
     v8Value retv = ctype_to_v8(vm, &retval);

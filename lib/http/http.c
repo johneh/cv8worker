@@ -51,7 +51,7 @@ struct http_s {
 
     int (*ondata)(char *buf, int size, void *q, int done);
     v8_state vm;
-    v8_val cr;
+    v8_coro cr;
 
     int state;
 
@@ -747,8 +747,8 @@ http_create(const char *host, int port, int useTLS) {
 }
 
 static coroutine void
-do_http_connect(v8_state vm, v8_val cr, void *ptr) {
-    struct http_s *s = ptr;
+do_http_connect(v8_state vm, v8_coro cr, int argc, v8_val args[]) {
+    struct http_s *s = V8_TOPTR(args[0]);
     ipaddr addr;
     int rc = ipremote(&addr, s->host, s->port, 0, s->deadline);
     if (rc != 0) {
@@ -758,27 +758,28 @@ do_http_connect(v8_state vm, v8_val cr, void *ptr) {
         if (!s->mfd)
             jsv8->goreject(vm, cr, strerror(errno));
         else
-            jsv8->goresolve(vm, cr, NULL, 0, 1);
+            jsv8->goresolve(vm, cr, V8_VOID, 1);
     }
 }
 
 static coroutine void
-do_http_send(v8_state vm, v8_val cr, void *ptr) {
-    struct send_s {
-        struct http_s *s;
-        int wlen;
-        char wbuf[1];
-    } __attribute__((packed));
-    struct send_s *ws = ptr;
-    struct http_s *s = ws->s;
-    int len = 0;
+do_http_send(v8_state vm, v8_coro cr, int argc, v8_val args[]) {
+    unsigned len = 0;
+    struct http_s *s = V8_TOPTR(args[0]);
+    unsigned wlen = V8_TOUINT32(args[2]);
+    void *wbuf;
+    if (V8_ISSTRING(args[1]))
+        wbuf = V8_TOSTR(args[1]);
+    else
+        wbuf = V8_TOPTR(args[1]);
+
     while (1) {
         int rc = s->writefunc(s->mfd,
-                        ws->wbuf + len, ws->wlen - len, s->deadline);
+                        wbuf + len, wlen - len, s->deadline);
         if (rc >= 0) {  /* sending 0 bytes shouldn't be an error */
             len += rc;
-            if (len == ws->wlen) {
-                jsv8->goresolve(vm, cr, NULL, 0, 1);
+            if (len == wlen) {
+                jsv8->goresolve(vm, cr, V8_VOID, 1);
                 break;
             }
         } else {
@@ -789,14 +790,15 @@ do_http_send(v8_state vm, v8_val cr, void *ptr) {
 }
 
 static coroutine void
-do_http_header(v8_state vm, v8_val cr, void *p1) {
-    struct http_s *s = p1;
+do_http_header(v8_state vm, v8_coro cr, int argc, v8_val args[]) {
+    struct http_s *s = V8_TOPTR(args[0]);
     int rc = fetch_header(s);
     if (rc < 0) {
         assert(s->state < 0);
         jsv8->goreject(vm, cr, strerror(-s->state));
     } else {
-        jsv8->goresolve(vm, cr, s->head, s->head_len, 1);
+        jsv8->goresolve(vm, cr, V8_STR(s->head, s->head_len), 1);
+        free(s->head);
         s->head = NULL;
     }
 }
@@ -822,8 +824,8 @@ v8_reada(char *buf, int size, void *p1, int done) {
 
 /* read complete body */
 static coroutine void
-do_http_reada(v8_state vm, v8_val cr, void *p1) {
-    struct http_s *s = p1;
+do_http_reada(v8_state vm, v8_coro cr, int argc, v8_val args[]) {
+    struct http_s *s = V8_TOPTR(args[0]);
     int rc;
 
     if (s->state != HEADER_COMPLETE) {
@@ -844,7 +846,7 @@ do_http_reada(v8_state vm, v8_val cr, void *p1) {
         s->state = -errno;
         jsv8->goreject(vm, cr, strerror(errno));
     } else {
-        jsv8->goresolve(vm, cr, s->body, s->body_len, 1);
+        jsv8->goresolve(vm, cr, V8_BUFFER(s->body, s->body_len), 1);
         s->body = NULL;
     }
 }
@@ -858,14 +860,14 @@ static int v8_readp(char *buf, int size, void *p1, int done) {
         s->state = BODY_COMPLETE;
     }
     /* buf memory disowned to V8 */
-    jsv8->goresolve(s->vm, s->cr, buf, size, done);
+    jsv8->goresolve(s->vm, s->cr, V8_BUFFER(buf, size), done);
     return 0;
 }
 
 /* push data */
 static coroutine void
-do_http_readp(v8_state vm, v8_val cr, void *p1) {
-    struct http_s *s = p1;
+do_http_readp(v8_state vm, v8_coro cr, int argc, v8_val args[]) {
+    struct http_s *s = V8_TOPTR(args[0]);
     int rc;
     if (s->state != HEADER_COMPLETE) {
         int err = s->state < 0 ? -s->state : EPROTO;
@@ -885,9 +887,6 @@ do_http_readp(v8_state vm, v8_val cr, void *p1) {
     }
 }
 
-/* KLUDGE */
-#define GOPULL (1 << 7)
-
 static int
 v8_readb(char *buf, int size, void *p1, int done) {
     struct http_s *s = p1;
@@ -899,14 +898,14 @@ v8_readb(char *buf, int size, void *p1, int done) {
     }
 
     /* buf memory disowned to V8 */
-    jsv8->goresolve(s->vm, s->cr, buf, size, done|GOPULL);
+    jsv8->goresolve(s->vm, s->cr, V8_BUFFER(buf, size), done);
     return 0;
 }
 
 /* pull data */
 static coroutine void
-do_http_readb(v8_state vm, v8_val cr, void *p1) {
-    struct http_s *s = p1;
+do_http_readb(v8_state vm, v8_coro cr, int argc, v8_val args[]) {
+    struct http_s *s = V8_TOPTR(args[0]);
     int rc;
     if (s->state != HEADER_COMPLETE) {
         int err = s->state < 0 ? -s->state : EPROTO;
@@ -965,24 +964,20 @@ do_http_set_deadline(v8_state vm, int argc, v8_val argv[]) {
 }
 
 static coroutine void
-do_http_listen_and_accept(v8_state vm, v8_val cr, void *ptr) {
-    struct ip_s {
-        int port;
-        int mode;
-        int backlog;
-        int reuseport;
-        char name[1];
-    } __attribute__((packed));
-    struct ip_s *ip = ptr;
+do_http_listen_and_accept(v8_state vm, v8_coro cr, int argc, v8_val args[]) {
+    int port = V8_TOINT32(args[0]);
+    int mode = V8_TOINT32(args[1]);
+    int backlog = V8_TOINT32(args[2]);
+    int reuseport = V8_TOINT32(args[3]);
+    char *name = V8_TOSTR(args[4]);
     ipaddr address;
-    int rc = iplocal(&address, ip->name[0] == '\0' ? NULL : ip->name,
-                        ip->port, ip->mode);
+    int rc = iplocal(&address, name[0] == '\0' ? NULL : name, port, mode);
     if (rc != 0) {
         jsv8->goreject(vm, cr, strerror(errno));
         return;
     }
     mill_fd lsock = tcplisten(&address,
-                ip->backlog <= 0 ? 128 : ip->backlog, ip->reuseport);
+                backlog <= 0 ? 128 : backlog, reuseport);
     if (!lsock) {
         jsv8->goreject(vm, cr, strerror(errno));
         return;
@@ -1004,7 +999,7 @@ do_http_listen_and_accept(v8_state vm, v8_val cr, void *ptr) {
             s->readfunc = mill_read;
             s->closefunc = tcpclose;
             s->closefd = mill_fdclose;
-            jsv8->goresolve(vm, cr, s, -1, 0);
+            jsv8->goresolve(vm, cr, V8_PTR(s), 0);
         } /* else 
             ignore error .. */
     }
@@ -1015,13 +1010,13 @@ static v8_ffn ff_table[] = {
     {1, do_http_free, "free", FN_CTYPE },
     {1, do_http_close, "closefd", FN_CTYPE },
     {2, do_http_set_deadline, "set_deadline", FN_CTYPE },
-    {0, do_http_connect, "connect", FN_CORO },
-    {0, do_http_send, "send", FN_CORO },
-    {0, do_http_header, "header", FN_CORO },
-    {0, do_http_reada, "reada", FN_CORO },
-    {0, do_http_readp, "readp", FN_CORO },
-    {0, do_http_readb, "readb", FN_CORO },
-    {0, do_http_listen_and_accept, "listen_and_accept", FN_CORO },
+    {1, do_http_connect, "connect", FN_CORO },
+    {3, do_http_send, "send", FN_CORO },
+    {1, do_http_header, "header", FN_CORO },
+    {1, do_http_reada, "reada", FN_CORO },
+    {1, do_http_readp, "readp", FN_COROPUSH },
+    {1, do_http_readb, "readb", FN_COROPULL },
+    {5, do_http_listen_and_accept, "listen_and_accept", FN_COROPUSH },
     {0},
 };
 

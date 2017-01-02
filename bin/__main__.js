@@ -32,10 +32,7 @@
                 delay |= 0;
                 if (delay < 0)
                     delay = 0;
-                let dp = $malloc(8);
-                dp.pack(0, 'j', delay);
-                $go(loader.msleep, dp).then(function(data) {
-                        dp.free();
+                $go(loader.msleep, delay).then(() => {
                         callback();
                     });
             };

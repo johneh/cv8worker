@@ -36,7 +36,7 @@ fetch({ host: 'news.google.com', schema: 'https'} )
         var b = await resp.body();
         $print(`Content-Length: ${resp.url}:`, $length(b));
     } catch (e) {
-        $print('Error:', e);
+        $print(url.host, ':', e);
     }
 })({ host: 'www.aol.com'});  // chunked encoding
 
@@ -50,23 +50,25 @@ fetch({ host: 'news.google.com', schema: 'https'} )
         console.log('CONTENT-TYPE =', h.get('Content-Type'));
 
         var n = 0;
-        var total = await resp.onBody(function(data, done) {
+        var total = await resp.onBody((data, done) => {
+            // XXX: should use try-catch
 			n += $length(data);
 			if (done)
 				return n;
 		});
         $print(`Content-Length: ${resp.url}:`, total);
     } catch (e) {
-        $print('Error:', e);
+        $print(url.host, ':', e);
     }
 })({host: 'www.google.com'});
+
 
 // like onBody() but slower
 fetch({ host:'www.google.com'})
 .then((resp) => {
     let bytesReceived = 0;
 
-    /* headers() is optional (always received first anyway see fetch.js) */
+    // headers() is optional (always received first anyway see fetch.js)
     resp.headers()
     .then((h) => {
         // $print(h);
@@ -86,4 +88,3 @@ fetch({ host:'www.google.com'})
         });
     });
 });
-
