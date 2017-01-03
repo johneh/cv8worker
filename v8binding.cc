@@ -519,12 +519,7 @@ static void Malloc(const v8::FunctionCallbackInfo<v8::Value>& args) {
     args.GetReturnValue().Set(ptrObj);
 }
 
-//
-// N.B.: Equals() corresponds to == in JS, StrictEquals() to ===
-// and SameValue() to Object.is in ES6.
-//
-
-// $isPointer(v [, typeid])
+// $isPointer(v [, isNotNull = false])
 static void IsPointer(const FunctionCallbackInfo<Value>& args) {
     int argc = args.Length();
     Isolate *isolate = args.GetIsolate();
@@ -532,12 +527,14 @@ static void IsPointer(const FunctionCallbackInfo<Value>& args) {
     ThrowNotEnoughArgs(isolate, argc < 1);
     v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
     bool r = (GetObjectId(vm, args[0]) == V8EXTPTR);
-    if (r && argc > 1) {
-        int ct = args[1]->Int32Value(
-                    isolate->GetCurrentContext()).FromJust();
-        if (GetCid(v8Object::Cast(args[0])) != ct)
-            r = false;
+    if (r && argc > 1 && args[1]->BooleanValue(
+                isolate->GetCurrentContext()).FromJust()) {
+        void *ptr = v8External::Cast(v8Object::Cast(args[1])
+                            -> GetInternalField(1))->Value();
+        if (!ptr)
+            r = false;   
     }
+
     args.GetReturnValue().Set(Boolean::New(isolate, r));
 }
 
@@ -577,6 +574,51 @@ static void ByteLength(const v8::FunctionCallbackInfo<v8::Value>& args) {
         return;
     }
     args.GetReturnValue().Set(Integer::New(isolate, len));
+}
+
+// utf8String(obj, length = -1)
+static void utf8String(const FunctionCallbackInfo<Value>& args) {
+    int argc = args.Length();
+    Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
+    ThrowNotEnoughArgs(isolate, argc < 1);
+    v8_state vm = reinterpret_cast<v8_state>(isolate->GetData(0));
+    v8Context context = isolate->GetCurrentContext();
+    v8Object obj = args[0]->ToObject(context).ToLocalChecked();
+
+    void *ptr;
+    int maxLength;
+    if (obj->IsArrayBuffer()) {
+        ArrayBuffer::Contents c = v8ArrayBuffer::Cast(obj)->GetContents();
+        ptr = c.Data();
+        maxLength = (int) c.ByteLength();
+    } else if (GetObjectId(vm, obj) == V8EXTPTR) {
+        ptr = v8External::Cast(obj->GetInternalField(1))->Value();
+        if (!ptr)
+            ThrowError(isolate, "utf8String: pointer is null");
+        maxLength = GetCtypeSize(obj);
+    } else {
+        ThrowTypeError(isolate, "utf8String: not a pointer");
+    }
+
+    int byteLength = -1;
+    if (maxLength < 0) {    // pointer
+        if (argc == 1)
+            ThrowError(isolate, "utf8String: LENGTH argument expected");
+        byteLength = args[0]->Int32Value(context).FromJust();
+        if (byteLength < 0)
+            byteLength = -1;    // assume nul-terminated
+    } else if (argc > 1) {
+        byteLength = args[1]->Int32Value(context).FromJust();
+        if (byteLength < 0)
+            byteLength = -1;
+        else if (byteLength > maxLength)
+            byteLength = maxLength;
+    } else {
+        byteLength = maxLength;
+    }
+    args.GetReturnValue().Set(String::NewFromUtf8(isolate, (char *) ptr,
+                v8::NewStringType::kNormal, byteLength).ToLocalChecked());
 }
 
 static void CallForeignFunc(
@@ -1105,6 +1147,8 @@ static void CreateIsolate(v8_state vm) {
     global->Set(v8STR(isolate, "$long"), LongTemplate(vm));
     global->Set(v8STR(isolate, "$transfer"),
                 FunctionTemplate::New(isolate, Transfer));
+    global->Set(v8STR(isolate, "$utf8String"),
+                FunctionTemplate::New(isolate, utf8String));
 
     v8Context context = Context::New(isolate, NULL, global);
     if (context.IsEmpty()) {

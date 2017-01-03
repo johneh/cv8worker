@@ -85,67 +85,6 @@ static void NotNull(const FunctionCallbackInfo<Value>& args) {
     args.GetReturnValue().Set(obj);
 }
 
-// ptr.setId(id) -- set Ctype id, returns the pointer.
-static void SetId(const FunctionCallbackInfo<Value>& args) {
-    Isolate *isolate = args.GetIsolate();
-    HandleScope handle_scope(isolate);
-    v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
-    v8Object obj = args.Holder();
-    if (GetObjectId(vm, obj) != V8EXTPTR)
-        ThrowTypeError(isolate, "setId: not a pointer");
-    int ct = 0;
-    if (args.Length() > 0) {
-        ct = args[0]->Int32Value(isolate->GetCurrentContext()).FromJust();
-    }
-    SetCid(obj, ct);
-    args.GetReturnValue().Set(obj);
-}
-
-// ptr.utf8String(length = -1)
-static void Utf8String(const FunctionCallbackInfo<Value>& args) {
-    int argc = args.Length();
-    Isolate *isolate = args.GetIsolate();
-    HandleScope handle_scope(isolate);
-    v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
-
-    v8Object obj = args.Holder();
-    void *ptr;
-    int maxLength;
-    if (obj->IsArrayBuffer()) {
-        ArrayBuffer::Contents c = v8ArrayBuffer::Cast(obj)->GetContents();
-        ptr = c.Data();
-        maxLength = (int) c.ByteLength();
-    } else if (GetObjectId(vm, obj) == V8EXTPTR) {
-        ptr = v8External::Cast(obj
-                        -> GetInternalField(1))->Value();
-        if (!ptr)
-            ThrowError(isolate, "utf8String: pointer is null");
-        maxLength = GetCtypeSize(obj);
-    } else {
-        ThrowTypeError(isolate, "utf8String: not a pointer");
-    }
-
-    int byteLength = -1;
-    if (maxLength < 0) {    // pointer
-        if (argc == 0)
-            ThrowError(isolate, "utf8String: LENGTH argument required");
-        byteLength = args[0]->Int32Value(isolate->GetCurrentContext()).FromJust();
-        if (byteLength < 0)
-            byteLength = -1;    // assume nul-terminated
-    } else if (argc > 0) {
-        byteLength = args[0]->Int32Value(isolate->GetCurrentContext()).FromJust();
-        if (byteLength < 0)
-            byteLength = -1;
-        else if (byteLength > maxLength)
-            byteLength = maxLength;
-    } else {
-        byteLength = maxLength;
-    }
-    args.GetReturnValue().Set(String::NewFromUtf8(isolate, (char *) ptr,
-                v8::NewStringType::kNormal, byteLength).ToLocalChecked());
-}
-
-
 static int packint(v8Value val,
             int width, int issigned, void *ptr, Isolate *isolate) {
     double d = val->NumberValue(
@@ -711,10 +650,6 @@ void MakeCtypeProto(v8_state vm) {
                 FunctionTemplate::New(isolate, Free));
     ptr_templ->Set(v8STR(isolate, "notNull"),
                 FunctionTemplate::New(isolate, NotNull));
-    ptr_templ->Set(v8STR(isolate, "setId"),
-                FunctionTemplate::New(isolate, SetId));
-    ptr_templ->Set(v8STR(isolate, "utf8String"),
-                FunctionTemplate::New(isolate, Utf8String));
     ptr_templ->Set(v8STR(isolate, "pack"),
                 FunctionTemplate::New(isolate, Pack));
     ptr_templ->Set(v8STR(isolate, "unpack"),

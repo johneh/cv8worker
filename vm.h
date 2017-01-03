@@ -91,18 +91,6 @@ static inline void SetObjectId(v8::Local<v8::Object> obj, unsigned oid) {
             reinterpret_cast<void*>(static_cast<uintptr_t>(oid<<2)));
 }
 
-static inline int GetCid(v8::Local<v8::Object> obj) {
-    return static_cast<int>(reinterpret_cast<uintptr_t>(
-                obj->GetAlignedPointerFromInternalField(0))>>16);
-}
-
-static inline void SetCid(v8::Local<v8::Object> obj, int cid) {
-    int id = static_cast<int>(reinterpret_cast<uintptr_t>(
-                obj->GetAlignedPointerFromInternalField(0))&0xFFFF)|((cid&0xFFFF)<<16);
-    obj->SetAlignedPointerInInternalField(0,
-                reinterpret_cast<void*>(static_cast<uintptr_t>(id)));
-}
-
 
 #define v8Value Local<Value>
 #define v8String Local<String>
