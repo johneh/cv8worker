@@ -641,6 +641,10 @@ static void Transfer(const FunctionCallbackInfo<Value>& args) {
    * preventing JavaScript from ever accessing underlying backing store.
    * ArrayBuffer should have been externalized and must be neuterable.
    */
+
+    /*
+     * FIXME -- should not have pending $go() call with arraybuffer as an argument!!
+     */
     ab->Neuter();
     args.GetReturnValue().Set(ArrayBuffer::New(isolate,
                     erealloc(c.Data(), byteLength),
@@ -848,7 +852,8 @@ int js8_do(struct js8_cmd_s *cmd) {
         cmd->vm->weak_counter = 0;
         isolate->RequestGarbageCollectionForTesting(
                             Isolate::kFullGarbageCollection);
-        V8_INT32(cmd->h2, cmd->vm->weak_counter);
+        cmd->h2.type = V8_CTYPE_INT32;
+        cmd->h2.i32 = cmd->vm->weak_counter;
     }
 #endif
         break;
