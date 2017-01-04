@@ -27,7 +27,10 @@ class ArrayBufferAllocator : public ArrayBuffer::Allocator {
         return data == NULL ? data : memset(data, 0, length);
     }
     virtual void* AllocateUninitialized(size_t length) {
-        return malloc(length);
+        void *data = malloc(length+1);
+        if (data != NULL)
+            *((char *)data + length) = '\0';
+        return data;
     }
     virtual void Free(void* data, size_t) { free(data); }
 };
@@ -586,7 +589,7 @@ static void utf8String(const FunctionCallbackInfo<Value>& args) {
     v8Context context = isolate->GetCurrentContext();
     v8Object obj = args[0]->ToObject(context).ToLocalChecked();
 
-    void *ptr;
+    void *ptr = nullptr;
     int maxLength;
     if (obj->IsArrayBuffer()) {
         ArrayBuffer::Contents c = v8ArrayBuffer::Cast(obj)->GetContents();
@@ -594,11 +597,11 @@ static void utf8String(const FunctionCallbackInfo<Value>& args) {
         maxLength = (int) c.ByteLength();
     } else if (GetObjectId(vm, obj) == V8EXTPTR) {
         ptr = v8External::Cast(obj->GetInternalField(1))->Value();
-        if (!ptr)
-            ThrowError(isolate, "utf8String: pointer is null");
-        maxLength = GetCtypeSize(obj);
-    } else {
-        ThrowTypeError(isolate, "utf8String: not a pointer");
+        if (ptr)
+            maxLength = GetCtypeSize(obj);
+    }
+    if (!ptr) {
+        ThrowTypeError(isolate, "utf8String: invalid argument");
     }
 
     int byteLength = -1;
@@ -1149,6 +1152,10 @@ static void CreateIsolate(v8_state vm) {
                 FunctionTemplate::New(isolate, Transfer));
     global->Set(v8STR(isolate, "$utf8String"),
                 FunctionTemplate::New(isolate, utf8String));
+    global->Set(v8STR(isolate, "$pack"),
+                FunctionTemplate::New(isolate, Pack));
+    global->Set(v8STR(isolate, "$unpack"),
+                FunctionTemplate::New(isolate, Unpack));
 
     v8Context context = Context::New(isolate, NULL, global);
     if (context.IsEmpty()) {

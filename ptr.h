@@ -12,4 +12,7 @@ extern v8::Local<v8::Object> WrapPtr(js_vm *vm, void *ptr);
 extern void *UnwrapPtr(v8::Local<v8::Object> ptrObj);
 extern void Gc(const v8::FunctionCallbackInfo<v8::Value>& args);
 
+extern void Pack(const v8::FunctionCallbackInfo<v8::Value>& args);
+extern void Unpack(const v8::FunctionCallbackInfo<v8::Value>& args);
+
 }

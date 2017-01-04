@@ -85,43 +85,61 @@ static void NotNull(const FunctionCallbackInfo<Value>& args) {
     args.GetReturnValue().Set(obj);
 }
 
+enum {
+    BadFmtSpec = -10,
+    NotEnoughArgs,
+    InvalidValue,
+    RangeError,
+};
+
+struct pack_s {
+    char *ptr;
+    char *end;
+    int errcode;
+};
+
+#define CHECK(_ps, _w) if (_ps->ptr + (_w) > _ps->end) return RangeError
+
 static int packint(v8Value val,
-            int width, int issigned, void *ptr, Isolate *isolate) {
+            int width, int issigned, pack_s *ps, Isolate *isolate) {
+    CHECK(ps, width);
+    char *ptr = ps->ptr;
     double d = val->NumberValue(
                 isolate->GetCurrentContext()).FromJust();
-    if (width == 1) {
+    switch (width) {
+    case 1:
         if (issigned)
             *((int8_t *) ptr) = (int8_t) d;
         else
             *((uint8_t *) ptr) = (uint8_t) d;
-        return 1;
-    } else if (width == 2) {
+        ps->ptr++;
+        break;
+    case 2:
         if (issigned)
             *((int16_t *) ptr) = (int16_t) d;
         else
             *((uint16_t *) ptr) = (uint16_t) d;
-        return 2;
-    } else if (width == 4) {
+        ps->ptr += 2;
+        break;
+    case 4:
         if (issigned)
             *((int32_t *) ptr) = (int32_t) d;
         else
             *((uint32_t *) ptr) = (uint32_t) d;
-        return 4;
-    } else {
+        ps->ptr += 4;
+        break;
+    default:
         /* width == 8 */
         if (issigned)
             *((int64_t *) ptr) = (int64_t) d;
         else
             *((uint64_t *) ptr) = (uint64_t) d;
-        return 8;
+        ps->ptr += 8;
+        break;
     }
+    return 0;
 }
 
-enum {
-    BadFmtSpec = -10,
-    NotEnoughArgs,
-    InvalidValue
-};
 
 // FIXME -- use pure JS implementation. 
 static int32_t packsize(int fmt, Isolate *isolate, v8Value val) {
@@ -247,92 +265,107 @@ static void PackSize(const FunctionCallbackInfo<Value>& args) {
     args.GetReturnValue().Set(Integer::New(isolate, sz));
 }
 
-static int32_t pack(void *ptr, int fmt, Isolate *isolate, v8Value val) {
+static int pack(pack_s *ps, int fmt, Isolate *isolate, v8Value val) {
     switch (fmt) {
     case '_':   /* null */
         return 0;
     case 'c': {
         v8String s = val->ToString(
                 isolate->GetCurrentContext()).ToLocalChecked();
+        CHECK(ps, 1);
         int l = 0;
         if (s->Utf8Length() > 0)
-            l = s->WriteUtf8((char *) ptr, 1);
+            l = s->WriteUtf8((char *) ps->ptr, 1);
         if (l == 0)
             return InvalidValue;
+        ps->ptr++;
     }
-        return 1;
+        return 0;
     case 'b':   /* char */
-        return packint(val, 1, true, ptr, isolate);
+        return packint(val, 1, true, ps, isolate);
     case 'B':   /* unsigned char */
-        return packint(val, 1, false, ptr, isolate);
+        return packint(val, 1, false, ps, isolate);
     case 'h':   /* short */
-        return packint(val, 2, true, ptr, isolate);
+        return packint(val, 2, true, ps, isolate);
     case 'H':   /* unsigned short */
-        return packint(val, 2, false, ptr, isolate);
+        return packint(val, 2, false, ps, isolate);
     case 'i':   /* int32_t (native int) */
-        return packint(val, 4, true, ptr, isolate);
+        return packint(val, 4, true, ps, isolate);
     case 'I':   /* uint32_t (native unsigned int) */
-        return packint(val, 4, false, ptr, isolate);
+        return packint(val, 4, false, ps, isolate);
     case 'l':   /* native long */
         if (sizeof (long) == 4)
-            return packint(val, 4, true, ptr, isolate);
-        return packint(val, 8, true, ptr, isolate);
+            return packint(val, 4, true, ps, isolate);
+        return packint(val, 8, true, ps, isolate);
     case 'L':   /* native unsigned long */
         if (sizeof (unsigned long) == 4)
-            return packint(val, 4, false, ptr, isolate);
-        return packint(val, 8, false, ptr, isolate);
+            return packint(val, 4, false, ps, isolate);
+        return packint(val, 8, false, ps, isolate);
     case 'j':   /* int64_t */
-        return packint(val, 8, true, ptr, isolate);
+        return packint(val, 8, true, ps, isolate);
     case 'J':   /* uint64_t */
-        return packint(val, 8, false, ptr, isolate);
+        return packint(val, 8, false, ps, isolate);
     case 'd':
-        *((double *) ptr) = val->NumberValue(
+        CHECK(ps, 8);
+        *((double *) ps->ptr) = val->NumberValue(
                 isolate->GetCurrentContext()).FromJust();
-        return 8;
+        ps->ptr += 8;
+        return 0;
     case 'x':   /* padding */
-        return 1;
-    case 'S':
-    case 's': {
-        /* nul-terminated string */
+        CHECK(ps, 1);
+        ps->ptr++;     
+        return 0;
+    case 'z': {
         v8String s = val->ToString(
                     isolate->GetCurrentContext()).ToLocalChecked();
-        int utf8len = s->Utf8Length();      /* >= 0 */
-        int l = s->WriteUtf8((char *)ptr, utf8len);
-        if (fmt == 's') {
-            *((char *) ptr + l) = '\0';
-            return l+1;
+        unsigned utf8len = s->Utf8Length();      /* >= 0 */
+        CHECK(ps, utf8len + 4);
+        int l = s->WriteUtf8((char *) ps->ptr + 4, (int) utf8len);
+        *((int32_t *) ps->ptr) = l;
+        ps->ptr += (l + 4);
+        return 0;
+    }
+    case 'S':
+    case 'r':
+    case 's': {
+        /* nul-terminated string */
+        int nulls = (fmt == 's');
+        v8String s = val->ToString(
+                    isolate->GetCurrentContext()).ToLocalChecked();
+        unsigned utf8len = s->Utf8Length();      /* >= 0 */
+        CHECK(ps, utf8len + nulls);
+        int l = s->WriteUtf8(ps->ptr, nulls ? -1 : (int) utf8len);
+        if (nulls) {
+            *((char *) ps->ptr + l) = '\0';
+            ps->ptr += (l+1);
         } else
-            return l;
+            ps->ptr += l;
+        return 0;
     }
     case 'a':   /* arraybuffer, typedarray or dataview, string or ptr */
         if (val->IsArrayBufferView()) {
             v8ArrayBufferView av = v8ArrayBufferView::Cast(val);
             size_t byte_length = av->ByteLength();
-            if (byte_length > INT32_MAX - 4)
+            if (byte_length > INT32_MAX)
                 return InvalidValue;
-            *((int32_t *) ptr) = (int32_t) byte_length;
-            size_t l = av->CopyContents((char *) ptr + 4, byte_length);
+            CHECK(ps, byte_length + 4);
+            *((int32_t *) ps->ptr) = (int32_t) byte_length;
+            size_t l = av->CopyContents(ps->ptr + 4, byte_length);
             assert(l == byte_length);
-            return 4 + byte_length;
+            ps->ptr += (l + 4);
+            return 0;
         }
         if (val->IsArrayBuffer()) {
             ArrayBuffer::Contents c = v8ArrayBuffer::Cast(val)->GetContents();
             size_t byte_length = c.ByteLength();
-            if (byte_length > INT32_MAX - 4)
+            if (byte_length > INT32_MAX)
                 return InvalidValue;
-            *((int32_t *) ptr) = (int32_t) byte_length;
-            memcpy((char *)ptr + 4, c.Data(), byte_length);
-            return 4 + byte_length;
-        }
-        if (val->IsString()) {
-            v8String s = val->ToString(
-                    isolate->GetCurrentContext()).ToLocalChecked();
-            int utf8len = s->Utf8Length();      /* >= 0 */
-            *((int32_t *) ptr) = (int32_t) utf8len;
-            if (utf8len <= INT32_MAX - 4
-                    && utf8len == s->WriteUtf8((char *)ptr+4, utf8len))
-                return 4 + utf8len;
-        } else {
+            CHECK(ps, byte_length + 4);
+            *((int32_t *) ps->ptr) = (int32_t) byte_length;
+            memcpy((char *) ps->ptr + 4, c.Data(), byte_length);
+            ps->ptr += (4 + byte_length);
+            return 0;
+        }/* else {
             int size;
             v8Object ptrObj = ToPtr(val);
             if (! ptrObj.IsEmpty() && (size = GetCtypeSize(ptrObj)) >= 0
@@ -342,13 +375,15 @@ static int32_t pack(void *ptr, int fmt, Isolate *isolate, v8Value val) {
                 memcpy((char *)ptr+4, UnwrapPtr(ptrObj), size);
                 return 4 + size;
             }
-        }
+        }*/
         return InvalidValue;
     case 'p': {
         v8Object ptrObj = ToPtr(val);
         if (! ptrObj.IsEmpty()) {
-            *((void **) ptr) = UnwrapPtr(ptrObj);
-            return sizeof (void *);
+            CHECK(ps, sizeof (void *));
+            *((void **) ps->ptr) = UnwrapPtr(ptrObj);
+            ps->ptr += sizeof (void *);
+            return 0;
         }
     }
         return InvalidValue;
@@ -358,12 +393,10 @@ static int32_t pack(void *ptr, int fmt, Isolate *isolate, v8Value val) {
     return BadFmtSpec;
 }
 
-static int32_t pack_n(char *ptr, char *fmt,
+static int pack_n(pack_s *ps, char *fmt,
             const FunctionCallbackInfo<Value>& args) {
-    int c, nexti = 2;
+    int c, nexti = 3, ret;
     int argc = args.Length();
-    char *p0 = ptr;
-    int32_t sz;
     while ((c = *fmt)) {
         if (c >= '0' && c <= '9') {
             /* " .. COUNTx .." */
@@ -373,178 +406,160 @@ static int32_t pack_n(char *ptr, char *fmt,
             }
             if (c != 'x')
                 return BadFmtSpec;
-            ptr += count;
+            CHECK(ps, count);
+            ps->ptr += count;
             fmt++;
             continue;
         }
         if (c == 'x') {  /* same as "1x" */
-            ptr++;
+            CHECK(ps, 1);
+            ps->ptr++;
             fmt++;
             continue;
         }
         if (argc < (nexti + 1))
             return NotEnoughArgs;
-        sz = pack(ptr, *fmt, args.GetIsolate(), args[nexti]);
-        if (sz < 0)
-            return sz;
-        ptr += sz;
+        ret = pack(ps, *fmt, args.GetIsolate(), args[nexti]);
+        if (ret < 0)
+            return ret;
         fmt++;
         nexti++;
     }
-    return (int32_t) (ptr - p0);
+    return 0;
 }
 
-// ptr.pack(offset, format, value1, ... )
-static void Pack(const FunctionCallbackInfo<Value>& args) {
-    int argc = args.Length();
-    Isolate *isolate = args.GetIsolate();
-    HandleScope handle_scope(isolate);
-    ThrowNotEnoughArgs(isolate, argc < 1);
-    v8Object obj = args.Holder();
-    void *ptr;
-    if (obj->IsArrayBuffer()) {
-        ptr = v8ArrayBuffer::Cast(obj)->GetContents().Data();
-    } else if (GetObjectId((v8_state) isolate->GetData(0), obj) == V8EXTPTR) {
-        ptr = v8External::Cast(obj
-                        -> GetInternalField(1))->Value();
-        if (!ptr)
-            ThrowError(isolate, "pack: pointer is null");
-    } else {
-        ThrowTypeError(isolate, "pack: not a pointer");
-    }
-
-    if (!args[0]->IsUint32())
-        ThrowError(isolate, "pack: offset is not unsigned integer");
-    size_t off = args[0]->Uint32Value(isolate->GetCurrentContext()).FromJust();
-    ptr = (char *) ptr + off;
-    int32_t sz = 0;
-
-    if (argc > 1) {
-        sz = -1;
-        String::Utf8Value fmt_str(args[1]);
-        if (fmt_str.length() > 0)
-            sz = pack_n((char *)ptr, *fmt_str, args);
-        if (sz < 0)
-            ThrowError(isolate,
-                "pack: invalid format or not enough arguments"); // FIXME seperate error messages
-    }
-    args.GetReturnValue().Set(Integer::New(isolate, sz));
-}
-
-static v8Value unpack(void *ptr, char fmtc,
-            Isolate *isolate, int32_t *pwidth) {
+#define CHK(_ps, _w) if (_ps->ptr + (_w) > _ps->end) { _ps->errcode = RangeError; break; }
+static v8Value unpack(pack_s *ps, char fmtc, Isolate *isolate) {
     EscapableHandleScope handle_scope(isolate);
     v8Value v = v8Value();
     switch (fmtc) {
     case '_':
-        *pwidth = 0;
         v = v8::Null(isolate);
         break;
     case 'c':
-        *pwidth = 1;
-        v = String::NewFromUtf8(isolate, (char *) ptr,
+        CHK(ps, 1)
+        v = String::NewFromUtf8(isolate, ps->ptr,
                         NewStringType::kNormal, 1).ToLocalChecked();
+        ps->ptr++;
         break;
     case 'b':
-        *pwidth = 1;
-        v = Integer::New(isolate, (int32_t) *((int8_t *) ptr));
+        CHK(ps, 1)
+        v = Integer::New(isolate, (int32_t) *((int8_t *) ps->ptr));
+        ps->ptr++;
         break;
     case 'i':
-        *pwidth = 4;
-        v = Integer::New(isolate, *((int32_t *) ptr));
+        CHK(ps, 4)
+        v = Integer::New(isolate, *((int32_t *) ps->ptr));
+        ps->ptr += 4;
         break;
     case 'h':
-        *pwidth = 2;
-        v = Integer::New(isolate, (int32_t) *((int16_t *) ptr));
+        CHK(ps, 2)
+        v = Integer::New(isolate, (int32_t) *((int16_t *) ps->ptr));
+        ps->ptr += 2;
         break;
     case 'H':
-        *pwidth = 2;
-        v = Integer::New(isolate, (int32_t) *((uint16_t *) ptr));
+        CHK(ps, 2)
+        v = Integer::New(isolate, (int32_t) *((uint16_t *) ps->ptr));
+        ps->ptr += 2;
         break;
     case 'B':
-        *pwidth = 1;
-        v = Integer::New(isolate, (int32_t) *((uint8_t *) ptr));
+        CHK(ps, 1)
+        v = Integer::New(isolate, (int32_t) *((uint8_t *) ps->ptr));
+        ps->ptr++;
         break;
     case 'd':
-        *pwidth = 8;
-        v = Number::New(isolate, *((double *) ptr));
+        CHK(ps, 8)
+        v = Number::New(isolate, *((double *) ps->ptr));
+        ps->ptr += 8;
         break;
     case 'I':
-        *pwidth = 4;
-        v = Integer::NewFromUnsigned(isolate, *((uint32_t *) ptr));
+        CHK(ps, 4)
+        v = Integer::NewFromUnsigned(isolate, *((uint32_t *) ps->ptr));
+        ps->ptr += 4;
         break;
     case 'l':
         if (sizeof (long) == 4) {
-            v = Integer::New(isolate, (int32_t) *((long *) ptr));
-            *pwidth = 4;
+            CHK(ps, 4)
+            v = Integer::New(isolate, (int32_t) *((long *) ps->ptr));
+            ps->ptr += 4;
         } else {
-            v = Number::New(isolate, *((int64_t *) ptr));
-            *pwidth = 8;
+            CHK(ps, 8)
+            v = Number::New(isolate, *((int64_t *) ps->ptr));
+            ps->ptr += 8;
         }
         break;
     case 'L':
         if (sizeof (unsigned long) == 4) {
+            CHK(ps, 4)
             v = Integer::NewFromUnsigned(isolate,
-                            (uint32_t) *((unsigned long *) ptr));
-            *pwidth = 4;
+                            (uint32_t) *((unsigned long *) ps->ptr));
+            ps->ptr += 4;
         } else {
-            v = Number::New(isolate, *((uint64_t *) ptr));
-            *pwidth = 8;
+            CHK(ps, 8)
+            v = Number::New(isolate, *((uint64_t *) ps->ptr));
+            ps->ptr += 8;
         }
         break;
     case 'j':
-        v = Number::New(isolate, *((int64_t *) ptr));
-        *pwidth = 8;
+        CHK(ps, 8)
+        v = Number::New(isolate, *((int64_t *) ps->ptr));
+        ps->ptr += 8;
         break;
     case 'J':
-        v = Number::New(isolate, *((uint64_t *) ptr));
-        *pwidth = 8;
+        CHK(ps, 8)
+        v = Number::New(isolate, *((uint64_t *) ps->ptr));
+        ps->ptr += 8;
         break;
-    case 's':   // nul-terminated string
-        v = String::NewFromUtf8(isolate, (char *) ptr);
-        *pwidth = strlen((char *) ptr) + 1;
-        break;
-    case 'p':
-        v = WrapPtr((v8_state ) isolate->GetData(0), *((void **) ptr));
-        *pwidth = sizeof (void *);
-        break;
-    case 'a': {
-        int32_t byte_length = *((int32_t *) ptr);
-        if (byte_length < 0) {
-            *pwidth = InvalidValue;
-        } else {
-            void *data = emalloc(byte_length);
-            memcpy(data, (char *) ptr + 4, byte_length);
-            v = ArrayBuffer::New(isolate, data, byte_length,
-                             ArrayBufferCreationMode::kInternalized);
-            *pwidth = 4 + byte_length;
-        }
+    case 's': {
+        // nul-terminated string
+        v = String::NewFromUtf8(isolate, ps->ptr,
+                       v8::NewStringType::kNormal, -1).ToLocalChecked();
+        int l = v8String::Cast(v)->Utf8Length();
+        CHK(ps, l+1);
+        ps->ptr += (l+1);
     }
         break;
-    case 'A': {
-        // Externalized arraybuffer; Will need to keep a reference to the
-        // pointer. (Hint: A global weak map with arraybuffer as key and
-        // the pointer as value.)
-        int32_t byte_length = *((int32_t *) ptr);
-        if (byte_length < 0) {
-            *pwidth = InvalidValue;
-        } else {
-            v = ArrayBuffer::New(isolate, (char *) ptr + 4, byte_length);
-            *pwidth = 4 + byte_length;
-        }
+    case 'p':
+        CHK(ps, sizeof (void *))
+        v = WrapPtr((v8_state ) isolate->GetData(0), *((void **) ps->ptr));
+        ps->ptr += sizeof (void *);
+        break;
+    case 'z': {
+        CHK(ps, 4)
+        int32_t byte_length = *((int32_t *) ps->ptr);
+        ps->ptr += 4;
+        CHK(ps, byte_length)
+        v = String::NewFromUtf8(isolate, ps->ptr,
+                        v8::NewStringType::kNormal, byte_length).ToLocalChecked();
+        ps->ptr += byte_length;
+    }
+        break;
+    case 'a': {
+        CHK(ps, 4)
+        int32_t byte_length = *((int32_t *) ps->ptr);
+        assert(byte_length >= 0);
+        ps->ptr += 4;
+        CHK(ps, byte_length)
+        void *data = emalloc(byte_length);
+        memcpy(data, ps->ptr, byte_length);
+        v = ArrayBuffer::New(isolate, data, byte_length,
+                             ArrayBufferCreationMode::kInternalized);
+        ps->ptr += byte_length;
     }
         break;
     default:
-        *pwidth = BadFmtSpec;
+        ps->errcode = BadFmtSpec;
+        break;
     }
     return handle_scope.Escape(v);
 }
 
-
-static int32_t unpack_n(char *ptr, char *fmt, Isolate *isolate, v8Array arr) {
+static v8Array unpack_n(pack_s *ps, char *fmt, Isolate *isolate) {
+    EscapableHandleScope handle_scope(isolate);
     int c, i = 0;
-    char *p0 = ptr;
-    int32_t sz;
+    char *p0 = ps->ptr;
+    v8Array arr = Array::New(isolate);
+
     while ((c = *fmt)) {
         if (c >= '0' && c <= '9') {
             /* " .. COUNTx .." */
@@ -552,62 +567,108 @@ static int32_t unpack_n(char *ptr, char *fmt, Isolate *isolate, v8Array arr) {
             while ((c = *++fmt) && c >= '0' && c <= '9') {
                 count = count * 10 + c - '0';
             }
-            if (c != 'x')
-                return BadFmtSpec;
-            ptr += count;
+            if (c != 'x') {
+                ps->errcode = BadFmtSpec;
+                break;
+            }
+            CHK(ps, count);
+            ps->ptr += count;
             fmt++;
             continue;
         }
         if (c == 'x') {  /* same as "1x" */
-            ptr++;
+            CHK(ps, 1);
+            ps->ptr++;
             fmt++;
             continue;
         }
-        v8Value v = unpack(ptr, *fmt, isolate, & sz);
-        if (sz < 0)
-            return sz;
+        v8Value v = unpack(ps, *fmt, isolate);
+        if (v.IsEmpty())    /* ps->errcode set */
+            break;
         arr->Set(i, v);
         i++;
-        ptr += sz;
         fmt++;
     }
-    sz = (int32_t) (ptr - p0);
-    arr->Set(i, Integer::New(isolate, sz));
-    return sz;
+    arr->Set(i, Number::New(isolate, (ps->ptr - p0)));
+    return handle_scope.Escape(arr);
 }
 
-// ptr.unpack(offset, format)
-// Returns null if the format argument is invalid.
-static void Unpack(const FunctionCallbackInfo<Value>& args) {
+// pack(object, offset, format, ...)
+void Pack(const FunctionCallbackInfo<Value>& args) {
     int argc = args.Length();
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
-    ThrowNotEnoughArgs(isolate, argc < 1);
-    v8Object obj = args.Holder();
-    void *ptr;
+    ThrowNotEnoughArgs(isolate, argc < 2);
+    v8Object obj = args[0]->ToObject(
+                isolate->GetCurrentContext()).ToLocalChecked();
+    struct pack_s ps = {0};
+    ps.end = (char *) UINTPTR_MAX;
+    char *ptr = nullptr;
     if (obj->IsArrayBuffer()) {
-        ptr = v8ArrayBuffer::Cast(obj)->GetContents().Data();
-    } else if (GetObjectId((v8_state ) isolate->GetData(0), obj) == V8EXTPTR) {
-        ptr = v8External::Cast(obj
-                        -> GetInternalField(1))->Value();
-        if (!ptr)
-            ThrowError(isolate, "pack: pointer is null");
-    } else {
-        ThrowTypeError(isolate, "pack: not a pointer");
+        ArrayBuffer::Contents c = v8ArrayBuffer::Cast(obj)->GetContents();
+        ptr = (char *) c.Data();
+        if (ptr)
+            ps.end = ptr + c.ByteLength();
+    } else if (GetObjectId((v8_state) isolate->GetData(0), obj) == V8EXTPTR) {
+        ptr = (char *) v8External::Cast(obj->GetInternalField(1))->Value();
+    }
+    if (!ptr) {
+        ThrowError(isolate, "empty buffer argument");
     }
 
-    if (!args[0]->IsUint32())
-        ThrowError(isolate, "unpack: offset is not unsigned integer");
-    size_t off = args[0]->Uint32Value(isolate->GetCurrentContext()).FromJust();
-    ptr = (char *) ptr + off;
-    if (argc > 1) {
-        String::Utf8Value fmt_str(args[1]);
+    size_t off = (size_t) args[1]->Uint32Value(
+                            isolate->GetCurrentContext()).FromJust();
+    ps.ptr = ptr = ptr + off;
+
+    size_t sz = 0;
+    if (argc > 2) {
+        String::Utf8Value fmt_str(args[2]);
         if (fmt_str.length() > 0) {
-            v8Array arr = Array::New(isolate, fmt_str.length()+1);
-            if (unpack_n((char *)ptr, *fmt_str, isolate, arr) > 0) {
-                args.GetReturnValue().Set(arr);
-                return;
-            }
+            int r = pack_n(&ps, *fmt_str, args);
+            if (r < 0)
+                ThrowError(isolate, "invalid format or argument(s)");   /* FIXME separate messages */
+            sz = ps.ptr - (char *) ptr;
+        }
+    }
+    args.GetReturnValue().Set(Number::New(isolate, sz));
+}
+
+// ptr.unpack(object, offset, format)
+// Returns null if the format is undefined or empty string.
+void Unpack(const FunctionCallbackInfo<Value>& args) {
+    int argc = args.Length();
+    Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
+    ThrowNotEnoughArgs(isolate, argc < 2);
+    v8Object obj = args[0]->ToObject(
+                isolate->GetCurrentContext()).ToLocalChecked();
+    struct pack_s ps = {0};
+    ps.end = (char *) UINTPTR_MAX;
+    char *ptr = nullptr;
+    if (obj->IsArrayBuffer()) {
+        ArrayBuffer::Contents c = v8ArrayBuffer::Cast(obj)->GetContents();
+        ptr = (char *) c.Data();
+        if (ptr)
+            ps.end = ptr + c.ByteLength();
+    } else if (GetObjectId((v8_state) isolate->GetData(0), obj) == V8EXTPTR) {
+        ptr = (char *)v8External::Cast(obj->GetInternalField(1))->Value();
+    }
+    if (!ptr) {
+        ThrowError(isolate, "invalid ArrayBuffer argument");
+    }
+
+    size_t off = (size_t) args[1]->Uint32Value(
+                            isolate->GetCurrentContext()).FromJust();
+    ps.ptr = ptr = ptr + off;
+
+    if (argc > 2) {
+        String::Utf8Value fmt_str(args[2]);
+        if (fmt_str.length() > 0) {
+            v8Array arr = unpack_n(&ps, *fmt_str, isolate);
+            if (ps.errcode < 0)
+                ThrowError(isolate, "invalid format or argument(s)");   /* FIXME separate messages */
+            args.GetReturnValue().Set(arr);
+            return;
         }
     }
     args.GetReturnValue().Set(v8::Null(isolate));
@@ -650,10 +711,6 @@ void MakeCtypeProto(v8_state vm) {
                 FunctionTemplate::New(isolate, Free));
     ptr_templ->Set(v8STR(isolate, "notNull"),
                 FunctionTemplate::New(isolate, NotNull));
-    ptr_templ->Set(v8STR(isolate, "pack"),
-                FunctionTemplate::New(isolate, Pack));
-    ptr_templ->Set(v8STR(isolate, "unpack"),
-                FunctionTemplate::New(isolate, Unpack));
     ptr_templ->Set(v8STR(isolate, "packSize"),
                 FunctionTemplate::New(isolate, PackSize));
 
