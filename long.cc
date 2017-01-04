@@ -318,7 +318,8 @@ void LongCntl(const v8::FunctionCallbackInfo<v8::Value>& args) {
     }
         break;
     case LONG_PACK:
-    case LONG_UNPACK: {
+    case LONG_UNPACK: /* {
+        FIXME -- arraybuffer ..
         if (argc < 3)
             ThrowNotEnoughArgs(isolate, true);
         v8Object obj = ToPtr(args[2]);
@@ -340,7 +341,7 @@ void LongCntl(const v8::FunctionCallbackInfo<v8::Value>& args) {
             SetUInt64(args[0], i1.val.u64);
         }
         args.GetReturnValue().Set(Integer::New(isolate, 8));
-    }
+    } */
         break;
     default:
         ThrowError(isolate, "$lcntl: 'cmd' argument is invalid");
@@ -404,61 +405,6 @@ static void Long(const v8::FunctionCallbackInfo<v8::Value>& args) {
     else
         args.GetReturnValue().Set(UInt64(vm, i1.val.u64));
 }
-
-#if 0
-static void Long(const v8::FunctionCallbackInfo<v8::Value>& args) {
-    int argc = args.Length();
-    Isolate *isolate = args.GetIsolate();
-    v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
-    HandleScope handle_scope(isolate);
-    ThrowNotEnoughArgs(isolate, argc < 1);
-    v8Context context = isolate->GetCurrentContext();
-    bool issigned = true;
-    if (argc > 1)
-        issigned = args[1]->BooleanValue(context).FromJust();
-
-    long64 i1;
-    i1.val.low = i1.val.high = 0;
-    if (args[0]->IsObject()) {  // likely array
-        v8Object obj = v8Object::Cast(args[0]);
-        if (obj->IsArray()) {
-            // Int32Value(object|NAN etc.) -> 0
-            // Int32Value('1') -> 1
-            i1.val.low = obj->Get(context, 0).ToLocalChecked()
-                        ->Int32Value(context).FromJust();
-            i1.val.high = obj->Get(context, 1).ToLocalChecked()
-                        ->Int32Value(context).FromJust();
-        }
-    } else if (args[0]->IsNumber()) {
-        double d = args[0]->NumberValue(context).FromJust();
-        if (isfinite(d)) {
-            if (issigned)
-                i1.val.i64 = d;
-            else
-                i1.val.u64 = d;
-        }
-    } else {
-        v8String s = args[0]->ToString(context).ToLocalChecked();
-        String::Utf8Value stval(s);
-        if (*stval) {
-            errno = 0;
-            if (issigned) {
-                i1.val.i64 = (int64_t) strtoll(*stval, nullptr, 0);
-                if (errno != 0)
-                    i1.val.i64 = 0;
-            } else {
-                i1.val.u64 = (uint64_t) strtoull(*stval, nullptr, 0);
-                if (errno != 0)
-                    i1.val.u64 = 0;
-            }
-        }
-    }
-    if (issigned)
-        args.GetReturnValue().Set(Int64(vm, i1.val.i64));
-    else
-        args.GetReturnValue().Set(UInt64(vm, i1.val.u64));
-}
-#endif
 
 Local<FunctionTemplate> LongTemplate(v8_state vm) {
     Isolate *isolate = vm->isolate;

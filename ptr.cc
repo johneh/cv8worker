@@ -45,16 +45,6 @@ void SetCtypeWeak(v8Object obj) {
                 reinterpret_cast<void*>(static_cast<uintptr_t>(id)));
 }
 
-void SetCtypeSize(v8Object obj, int size) {
-    obj->SetAlignedPointerInInternalField(2,
-            reinterpret_cast<void*>(static_cast<intptr_t>(size << 1)));
-}
-
-int GetCtypeSize(v8Object obj) {
-    return static_cast<int>(reinterpret_cast<intptr_t>(
-                obj->GetAlignedPointerFromInternalField(2))>>1);
-}
-
 static void Free(const FunctionCallbackInfo<Value>& args) {
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
@@ -191,12 +181,6 @@ static int32_t packsize(int fmt, Isolate *isolate, v8Value val) {
             byte_length = s->Utf8Length();
             goto x;
         } else {
-            int size;
-            v8Object ptrObj = ToPtr(val);
-            if (! ptrObj.IsEmpty() && (size = GetCtypeSize(ptrObj)) >= 0) {
-                byte_length = size;
-                goto x;
-            }
             return InvalidValue;
         }
 x:
@@ -326,7 +310,6 @@ static int pack(pack_s *ps, int fmt, Isolate *isolate, v8Value val) {
         return 0;
     }
     case 'S':
-    case 'r':
     case 's': {
         /* nul-terminated string */
         int nulls = (fmt == 's');
@@ -365,17 +348,7 @@ static int pack(pack_s *ps, int fmt, Isolate *isolate, v8Value val) {
             memcpy((char *) ps->ptr + 4, c.Data(), byte_length);
             ps->ptr += (4 + byte_length);
             return 0;
-        }/* else {
-            int size;
-            v8Object ptrObj = ToPtr(val);
-            if (! ptrObj.IsEmpty() && (size = GetCtypeSize(ptrObj)) >= 0
-                    && size <= INT32_MAX - 4
-            ) {
-                *((int32_t *) ptr) = size;
-                memcpy((char *)ptr+4, UnwrapPtr(ptrObj), size);
-                return 4 + size;
-            }
-        }*/
+        }
         return InvalidValue;
     case 'p': {
         v8Object ptrObj = ToPtr(val);
@@ -688,7 +661,6 @@ v8Object WrapPtr(v8_state vm, void *ptr) {
                     isolate->GetCurrentContext()).ToLocalChecked();
     SetObjectId(obj, V8EXTPTR);
     obj->SetInternalField(1, External::New(isolate, ptr));
-    SetCtypeSize(obj, -1);  // opaque
     obj->SetPrototype(v8Value::New(isolate, vm->cptr_proto));
     return handle_scope.Escape(obj);
 }

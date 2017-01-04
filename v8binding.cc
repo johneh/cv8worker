@@ -27,7 +27,7 @@ class ArrayBufferAllocator : public ArrayBuffer::Allocator {
         return data == NULL ? data : memset(data, 0, length);
     }
     virtual void* AllocateUninitialized(size_t length) {
-        void *data = malloc(length+1);
+        void *data = malloc((length+8)&~7);
         if (data != NULL)
             *((char *)data + length) = '\0';
         return data;
@@ -518,7 +518,6 @@ static void Malloc(const v8::FunctionCallbackInfo<v8::Value>& args) {
         memset(ptr, '\0', size);
     v8Object ptrObj = WrapPtr(
             reinterpret_cast<js_vm*>(isolate->GetData(0)), ptr);
-    SetCtypeSize(ptrObj, size);
     args.GetReturnValue().Set(ptrObj);
 }
 
@@ -557,12 +556,9 @@ static void ByteLength(const v8::FunctionCallbackInfo<v8::Value>& args) {
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
     ThrowNotEnoughArgs(isolate, args.Length() < 1);
-    int len = 0;    // maybe < 0 (for Opaque pointer or overflow otherwise).
+    unsigned len = 0;    // maybe < 0 (for Opaque pointer or overflow otherwise).
 
-    v8Object ptrObj = ToPtr(args[0]);
-    if (! ptrObj.IsEmpty()) {
-        len = GetCtypeSize(ptrObj);
-    } else if (args[0]->IsString()) {
+    if (args[0]->IsString()) {
         len = v8String::Cast(args[0])->Utf8Length();
     } else if (args[0]->IsArrayBufferView()) {
         /* ArrayBufferView is implemented by all typed arrays and DataView */
@@ -572,11 +568,11 @@ static void ByteLength(const v8::FunctionCallbackInfo<v8::Value>& args) {
     } else {
         /* ThrowTypeError(isolate, "$length(): invalid argument"); */
 
-        /* XXX: $length(x) !== null && $length(x) >= 0 */
+        /* XXX: $length(x) !== null */
         args.GetReturnValue().Set(v8::Null(isolate));
         return;
     }
-    args.GetReturnValue().Set(Integer::New(isolate, len));
+    args.GetReturnValue().Set(Integer::NewFromUnsigned(isolate, len));
 }
 
 // utf8String(obj, length = -1)
@@ -590,15 +586,13 @@ static void utf8String(const FunctionCallbackInfo<Value>& args) {
     v8Object obj = args[0]->ToObject(context).ToLocalChecked();
 
     void *ptr = nullptr;
-    int maxLength;
+    int maxLength = -1;
     if (obj->IsArrayBuffer()) {
         ArrayBuffer::Contents c = v8ArrayBuffer::Cast(obj)->GetContents();
         ptr = c.Data();
         maxLength = (int) c.ByteLength();
     } else if (GetObjectId(vm, obj) == V8EXTPTR) {
         ptr = v8External::Cast(obj->GetInternalField(1))->Value();
-        if (ptr)
-            maxLength = GetCtypeSize(obj);
     }
     if (!ptr) {
         ThrowTypeError(isolate, "utf8String: invalid argument");
@@ -671,6 +665,7 @@ static void Transfer(const FunctionCallbackInfo<Value>& args) {
     HandleScope handle_scope(isolate);
     ThrowNotEnoughArgs(isolate, argc < 2);
 
+    /* XXX: IsNeuterable() == false if SharedArrayBuffer ? */
     if (!args[0]->IsArrayBuffer()
             || !v8ArrayBuffer::Cast(args[0])->IsNeuterable()
     ) {
@@ -1204,7 +1199,6 @@ static void CreateIsolate(v8_state vm) {
     v8Object nullptr_obj = extptr_templ
                 -> NewInstance(context).ToLocalChecked();
     SetObjectId(nullptr_obj, V8EXTPTR);
-    SetCtypeSize(nullptr_obj, 0);
 
     nullptr_obj->SetInternalField(1, External::New(isolate, nullptr));
     nullptr_obj->SetPrototype(v8Value::New(isolate, vm->cptr_proto));
