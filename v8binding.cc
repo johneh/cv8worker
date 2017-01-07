@@ -184,8 +184,8 @@ coroutine static void recv_go(v8_state vm) {
     }
 }
 
-static void send_go(v8_state vm, Go_s *g) {
-    int rc = mill_pipesend(vm->inq, (void *) &g);
+static void send_go(Go_s *g) {
+    int rc = mill_pipesend(g->vm->inq, (void *) &g);
     if (rc == -1) {
         fprintf(stderr, "v8binding.cc:send_go(): writing to pipe failed\n");
         Panic(strerror(errno));
@@ -204,27 +204,21 @@ coroutine static void do_cgo(v8_state vm, v8_coro cr, int argc, v8_val args[]) {
 
 static v8_ffn cgodef = { 0, (void *) do_cgo, "__cgo__", FN_CORO };
 
-// $go(coro [, in1 [, in2 .. in12 ]])
-// $go(coro [, in1 [, in2 .. in12 ]], fn)
-//   fn-> function(result, done (= true|false))
-static void Go(const FunctionCallbackInfo<Value>& args) {
+static Go_s *coro_s(const FunctionCallbackInfo<Value>& args) {
     Go_s *g;
     v8_state vm;
-    Isolate *isolate;
-
-    if (true) { // start V8 scope
-
-    isolate = args.GetIsolate();
+    Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
     int argc = args.Length();
-    ThrowNotEnoughArgs(isolate, argc < 1);
+    if (argc < 1)
+        Panic("not enough arguments");
     vm = reinterpret_cast<v8_state>(isolate->GetData(0));
     v8_ffn *fndef;
 
     v8Object coro = ToGo(args[0]);
     if (coro.IsEmpty()) {
         if (GetObjectId(vm, args[0]) != V8EXTFUNC)
-            ThrowTypeError(isolate, "$go argument #1: coroutine expected");
+            Panic("coroutine argument #1 expected");
         // use the do_cgo wrapper to run in the other thread.
         fndef = reinterpret_cast<v8_ffn *>(
                     v8External::Cast(
@@ -238,15 +232,13 @@ static void Go(const FunctionCallbackInfo<Value>& args) {
 
     if (fndef->type == FN_COROPUSH) {
         if (argc < 2 || !args[argc-1]->IsFunction())
-            ThrowTypeError(isolate,
-                "$go: callback (last argument) is not a function");
+            Panic("coroutine callback (last argument) is not a function");
         argc--;
     }
 
     argc--;
     if (argc > MAXARGS || argc != fndef->pcount)
-        ThrowError(isolate,
-                "$go: incorrect number of arguments for the goroutine");
+        Panic("coroutine called with incorrect number of arguments");
 
     g = new Go_s;
     g->vm = vm;
@@ -271,10 +263,36 @@ static void Go(const FunctionCallbackInfo<Value>& args) {
 
     g->hpr = NewPersister(vm, pr);
     vm->ncoro++;
+    return g;
+}
 
-    }   // end V8 scope
 
-    send_go(vm, g);
+// $go(coro [, in1 [, in2 .. in12 ]])
+// $go(coro [, in1 [, in2 .. in12 ]], fn)
+//   fn-> function(result, done (= true|false))
+static void Go(const FunctionCallbackInfo<Value>& args) {
+    Go_s *g = coro_s(args);
+    assert(g);
+    send_go(g);
+}
+
+// $co() goroutine in the V8 thread.
+coroutine static void co_start(Go_s *g) {
+    mill_yield();
+    go(((Fngo)g->fndef->fp)(g->vm, g, g->argc, g->args));
+}
+
+static void co_sched(Go_s *g) {
+    go(co_start(g));
+}
+
+// $co(coro [, in1 [, in2 .. in12 ]])
+// $co(coro [, in1 [, in2 .. in12 ]], fn)
+//   fn-> function(result, done (= true|false))
+static void Co(const FunctionCallbackInfo<Value>& args) {
+    Go_s *g = coro_s(args);
+    assert(g);
+    co_sched(g);
 }
 
 static bool FinishGo(v8_state vm, GoCallback *cb) {
@@ -387,7 +405,6 @@ static void MakeGoTemplate(v8_state vm) {
     vm->go_template.Reset(isolate, templ);
 }
 
-// called from non-V8 thread.
 static int v8_goresolve(v8_state vm, v8_coro cr, v8_val data, int done) {
     GoCallback *cb = new GoCallback;
     cb->g = cr;
@@ -398,7 +415,6 @@ static int v8_goresolve(v8_state vm, v8_coro cr, v8_val data, int done) {
     return (rc == 0);
 }
 
-// called from non-V8 thread.
 static int v8_goreject(v8_state vm, v8_coro cr, const char *message) {
     GoCallback *cb = new GoCallback;
     cb->g = cr;
@@ -1122,6 +1138,8 @@ static void CreateIsolate(v8_state vm) {
                 FunctionTemplate::New(isolate, Print));
     global->Set(v8STR(isolate, "$go"),
                 FunctionTemplate::New(isolate, Go));
+    global->Set(v8STR(isolate, "$co"),
+                FunctionTemplate::New(isolate, Co));
     global->Set(v8STR(isolate, "$now"),
                 FunctionTemplate::New(isolate, Now));
     global->Set(v8STR(isolate, "$close"),
