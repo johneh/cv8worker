@@ -98,12 +98,11 @@ do_sqlite3_bind(v8_state vm, v8_coro cr, int argc, v8_val args[]) {
             ret = sqlite3_bind_double(stmt, i, *((double *) sp));
             sp += sizeof (double);
             break;
-        case 's': {
-            // FIXME don't use strlen, pass len + data AND pass length as
-            // 4th parameter to bind_text
-            int stlen = strlen(sp);
+        case 'z': {
+            int stlen = *((int *) sp);
+            sp += 4;
             ret = sqlite3_bind_text(stmt, i, sp, stlen, SQLITE_TRANSIENT);
-            sp += (stlen + 1);
+            sp += stlen;
         }
             break;
         case 'a': {
@@ -185,11 +184,11 @@ write_column(sqlite3_stmt *stmt, int i, int coltype, struct fb_buffer *b) {
         case SQLITE3_TEXT: {
             const char *txt = (const char *) sqlite3_column_text(stmt, i);
             int len = sqlite3_column_bytes(stmt, i);
-            set_column_type(b, i, 's'); // FIXME use sized string
-            size_buffer(b, len + 1);
-            memcpy(&b->buf[b->len], txt, len);
-            b->buf[b->len+=len] = '\0';
-            b->len++;
+            set_column_type(b, i, 'z');
+            size_buffer(b, len + 4);
+            *((int *) &b->buf[b->len]) = len;
+            memcpy(&b->buf[b->len + 4], txt, len);
+            b->len += (len + 4);
         }
             break;
         default: {

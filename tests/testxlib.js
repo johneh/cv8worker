@@ -15,6 +15,10 @@ function makeWindow(circle) {
             this.drawLine(gc, 25, 50, 200, 50);
     }, gc);
 
+    w1.addEventListener(XEvent.MapNotify, function(ev) {
+        console.log('Mapped window:', ev.window);
+    });
+
     w1.addEventListener(XEvent.DestroyNotify, function(ev) {
         console.log('Destroyed window:', ev.window);
     });
@@ -28,6 +32,8 @@ function makeWindow(circle) {
         console.log("Key pressed =", ch);
         if (ch === 'q')
             this.destroy();
+        else if (ch === 'r')
+            this.invalidateRect(20, 30, 100, 100);
     });
 
     w1.background = '#ffffff';
@@ -39,6 +45,7 @@ function makeWindow(circle) {
     w1.map();
 }
 
+//$print(Window.WHITEPIXEL, Window.BLACKPIXEL);
 makeWindow(false);
 makeWindow(true);
 
