@@ -547,7 +547,7 @@ static void IsPointer(const FunctionCallbackInfo<Value>& args) {
     bool r = (GetObjectId(vm, args[0]) == V8EXTPTR);
     if (r && argc > 1 && args[1]->BooleanValue(
                 isolate->GetCurrentContext()).FromJust()) {
-        void *ptr = v8External::Cast(v8Object::Cast(args[1])
+        void *ptr = v8External::Cast(v8Object::Cast(args[0])
                             -> GetInternalField(1))->Value();
         if (!ptr)
             r = false;   
@@ -633,6 +633,21 @@ static void utf8String(const FunctionCallbackInfo<Value>& args) {
     args.GetReturnValue().Set(String::NewFromUtf8(isolate, (char *) ptr,
                 v8::NewStringType::kNormal, byteLength).ToLocalChecked());
 }
+
+//$toarraybuffer(string)
+static void ToArrayBuffer(const FunctionCallbackInfo<Value>& args) {
+    int argc = args.Length();
+    Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
+    if (argc < 1 || !args[0]->IsString())
+        ThrowTypeError(isolate, "string argument expected");
+    v8String s = v8String::Cast(args[0]);
+    int len = s->Utf8Length();
+    v8ArrayBuffer ab = ArrayBuffer::New(isolate, len);
+    s->WriteUtf8(reinterpret_cast<char*>(ab->GetContents().Data()), len);
+    args.GetReturnValue().Set(ab);
+}
+
 
 static void CallForeignFunc(
         const v8::FunctionCallbackInfo<v8::Value>& args) {
@@ -1165,6 +1180,8 @@ static void CreateIsolate(v8_state vm) {
                 FunctionTemplate::New(isolate, Transfer));
     global->Set(v8STR(isolate, "$utf8String"),
                 FunctionTemplate::New(isolate, utf8String));
+    global->Set(v8STR(isolate, "$toarraybuffer"),
+                FunctionTemplate::New(isolate, ToArrayBuffer));
     global->Set(v8STR(isolate, "$pack"),
                 FunctionTemplate::New(isolate, Pack));
     global->Set(v8STR(isolate, "$unpack"),
