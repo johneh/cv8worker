@@ -194,7 +194,7 @@ static void send_go(Go_s *g) {
 
 static int v8_goresolve(v8_state vm, v8_coro cr, v8_val data, int done);
 
-// goroutine wpapper for a C-type function running in non-V8 thread
+// goroutine wpapper for a C-type function.
 // N.B.: cannot reliably read errno set by the function.
 coroutine static void do_cgo(v8_state vm, v8_coro cr, int argc, v8_val args[]) {
     FnCtype fp = (FnCtype) (((struct Go_s *) cr)->fp);
@@ -219,7 +219,7 @@ static Go_s *coro_s(const FunctionCallbackInfo<Value>& args) {
     if (coro.IsEmpty()) {
         if (GetObjectId(vm, args[0]) != V8EXTFUNC)
             Panic("coroutine argument #1 expected");
-        // use the do_cgo wrapper to run in the other thread.
+        // use the do_cgo wrapper.
         fndef = reinterpret_cast<v8_ffn *>(
                     v8External::Cast(
                         v8Object::Cast(args[0])->GetInternalField(1)
@@ -662,7 +662,7 @@ static void CallForeignFunc(
                 v8External::Cast(obj->GetInternalField(1))->Value());
     int argc = args.Length();
     if (argc > MAXARGS || argc != func_wrap->pcount)
-        ThrowError(isolate, "C-type function: incorrect number of arguments");
+        Panic("C-type function: incorrect number of arguments");
 
     assert(func_wrap->type == FN_CTYPE);
 
@@ -929,8 +929,7 @@ int js8_do(struct js8_cmd_s *cmd) {
 #endif
         break;
     default:
-        fprintf(stderr, "error: js8_do(): received unexpected code");
-        abort();
+        Panic("js8_do(): received unexpected code");
     }
     return 1;
 }

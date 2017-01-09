@@ -24,7 +24,7 @@ function makeWindow(circle) {
     });
 
     w1.addEventListener(XEvent.MotionNotify, function(ev) {
-        console.log(ev.get('x'), ev.get('y'));
+        console.log(ev.x, ev.y);
     });
 
     w1.addEventListener(XEvent.KeyPress, function(ev) {
