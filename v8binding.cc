@@ -237,7 +237,7 @@ static Go_s *coro_s(const FunctionCallbackInfo<Value>& args) {
     }
 
     argc--;
-    if (argc > MAXARGS || argc != fndef->pcount)
+    if (argc != fndef->pcount)
         Panic("coroutine called with incorrect number of arguments");
 
     g = new Go_s;
@@ -648,13 +648,12 @@ static void ToArrayBuffer(const FunctionCallbackInfo<Value>& args) {
     args.GetReturnValue().Set(ab);
 }
 
-
 static void CallForeignFunc(
         const v8::FunctionCallbackInfo<v8::Value>& args) {
 
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
-    v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
+    v8_state vm = reinterpret_cast<v8_state>(isolate->GetData(0));
 
     v8Object obj = args.Holder();
     assert(obj->InternalFieldCount() == 2);
@@ -772,10 +771,13 @@ v8_state js8_vmnew(mill_worker w) {
 static void GlobalGet(v8Name name,
         const PropertyCallbackInfo<Value>& info) {
     Isolate *isolate = info.GetIsolate();
+    v8_state vm = reinterpret_cast<v8_state>(isolate->GetData(0));
     HandleScope handle_scope(isolate);
     String::Utf8Value str(name);
     if (strcmp(*str, "$errno") == 0)
         info.GetReturnValue().Set(Integer::New(isolate, errno));
+    else if (strcmp(*str, "$$ncoro") == 0)
+        info.GetReturnValue().Set(Integer::New(isolate, vm->ncoro));
 }
 
 static void GlobalSet(v8Name name, v8Value val,
@@ -1249,6 +1251,8 @@ static void CreateIsolate(v8_state vm) {
 
     realGlobal->SetAccessor(context, v8STR(isolate, "$errno"),
                     GlobalGet, GlobalSet).FromJust();
+    realGlobal->SetAccessor(context, v8STR(isolate, "$$ncoro"),
+                    GlobalGet).FromJust();
 
     // Initial size should be some multiple of 32.
     vm->store_ = new PersistentStore(isolate, 1024);
@@ -1370,6 +1374,8 @@ static int v8_seti(v8_state vm, v8_val hobj,
 
 // Import a C function.
 static v8_val v8_cfunc(v8_state vm, const v8_ffn *func_item) {
+    if (func_item->pcount > MAXARGS)
+        Panic("v8_cfunc: too many function parameters");
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate);
     v8Context context = v8Context::New(isolate, vm->context);
@@ -1381,93 +1387,6 @@ static v8_val v8_cfunc(v8_state vm, const v8_ffn *func_item) {
         fnObj = WrapGo(vm, (v8_ffn *) func_item);
     return ctype_handle(NewPersister(vm, fnObj));
 }
-
-
-/* N.B.: V8 owns the Buffer memory. If ptr is not NULL, it must be
- * compatible with ArrayBuffer::Allocator::Free. */
-static v8_val v8_arraybuffer(v8_state vm, void *ptr, size_t byte_length) {
-    Isolate *isolate = vm->isolate;
-    LOCK_SCOPE(isolate)
-    v8Context context = v8Context::New(isolate, vm->context);
-    Context::Scope context_scope(context);
-    if (ptr) {
-        return ctype_handle(NewPersister(vm,
-                ArrayBuffer::New(isolate, ptr, byte_length,
-                    v8::ArrayBufferCreationMode::kInternalized)));
-    }
-    return ctype_handle(NewPersister(vm,
-            ArrayBuffer::New(isolate, byte_length)));
-}
-
-static size_t v8_bytelength(v8_state vm, v8_val val) {
-    Isolate *isolate = vm->isolate;
-    LOCK_SCOPE(isolate)
-    v8Value v1 = ctype_to_v8(vm, &val);
-    if (v1.IsEmpty())
-        return 0;
-    size_t len = 0;
-    if (v1->IsArrayBufferView()) {
-        /* ArrayBufferView is implemented by all typed arrays and DataView */
-        len = v8ArrayBufferView::Cast(v1)->ByteLength();
-    } else if (v1->IsArrayBuffer()) {
-        len = v8ArrayBuffer::Cast(v1)->ByteLength();
-    } /* else
-        len = 0; */
-    return len;
-}
-
-static size_t v8_byteoffset(v8_state vm, v8_val val) {
-    Isolate *isolate = vm->isolate;
-    LOCK_SCOPE(isolate)
-    v8Value v1 = ctype_to_v8(vm, &val);
-    size_t off = 0;
-    if (!v1.IsEmpty() && v1->IsArrayBufferView()) {
-        off = v8ArrayBufferView::Cast(v1)->ByteOffset();
-    } /* else
-        off = 0; */
-    return off;
-}
-
-v8_val v8_getbuffer(v8_state vm, v8_val val) {
-    Isolate *isolate = vm->isolate;
-    LOCK_SCOPE(isolate)
-    v8Value v1 = ctype_to_v8(vm, &val);
-    if (v1.IsEmpty() || !v1->IsTypedArray())
-        Panic("getbuffer: TypedArray argument expected");
-    v8Value ab = v8TypedArray::Cast(v1)->Buffer();
-    return ctype_handle(NewPersister(vm, ab));
-}
-
-void *v8_buffer(v8_state vm, v8_val abval) {
-    Isolate *isolate = vm->isolate;
-    LOCK_SCOPE(isolate)
-    v8Value v = ctype_to_v8(vm, &abval);
-    if (!v.IsEmpty()) {
-        if (v->IsArrayBuffer()) {
-            return v8ArrayBuffer::Cast(v)->GetContents().Data();
-        }
-        if (v->IsArrayBufferView()) {
-            v8ArrayBufferView av = v8ArrayBufferView::Cast(v);
-            return (char *)av->Buffer()->GetContents().Data() +
-                        av->ByteOffset();
-        }
-    }
-    Panic("buffer: invalid handle");
-    return nullptr;
-}
-
-#if 0
-void *v8_externalize(v8_state vm, v8_val val) {
-    Isolate *isolate = vm->isolate;
-    LOCK_SCOPE(isolate);
-    v8Value v1 = ctype_to_v8(vm, &val);
-    if (!v1.IsEmpty() && v1->IsArrayBuffer()) {
-        return v8ArrayBuffer::Cast(v1)->Externalize().Data();
-    }
-    Panic("externalize: ArrayBuffer argument expected");
-    return nullptr;
-}
-#endif
 
 static void v8_reset(v8_state vm, v8_val val) {
     switch (val.type) {
@@ -1627,17 +1546,13 @@ static const char *v8_ctype_errs[] = {
     "invalid handle",
 };
 
-static struct v8_fn_s v8fns = {
+static struct v8_api_s v8api = {
     v8_object,
     v8_get,
     v8_set,
     v8_geti,
     v8_seti,
     v8_array,
-    v8_arraybuffer,
-    v8_bytelength,  /* ArrayBuffer(View) */
-    v8_byteoffset, /* ArrayBufferView */
-    v8_buffer,
     v8_reset,
     v8_cfunc,
     v8_goresolve,
@@ -1651,9 +1566,9 @@ static struct v8_fn_s v8fns = {
     v8_ctype_errs,
 };
 
-struct v8_fn_s *jsv8 = &v8fns;
+struct v8_api_s *jsv8 = &v8api;
 
-typedef int (*Fnload)(v8_state, v8_val, v8_fn_s *const, v8_ffn **);
+typedef int (*Fnload)(v8_state, v8_val, v8_api_s *const, v8_ffn **);
 
 // $load - load a dynamic library.
 // The filename must contain a slash. Any path search should be
@@ -1692,7 +1607,7 @@ static void Load(const FunctionCallbackInfo<Value>& args) {
     v8Object o1 = Object::New(isolate);
     v8_val val1 = ctype_handle(NewPersister(vm, o1));
     errno = 0;
-    int nfunc = load_func(vm, val1, &v8fns, &functab);
+    int nfunc = load_func(vm, val1, &v8api, &functab);
     DeletePersister(vm, val1.hndle);
 
     if (nfunc < 0) {
@@ -1701,6 +1616,8 @@ static void Load(const FunctionCallbackInfo<Value>& args) {
     }
     for (int i = 0; i < nfunc && functab[i].name; i++) {
         v8Object fnObj;
+        if (functab[i].pcount > MAXARGS)
+            Panic("$load: too many function parameters");
         if (functab[i].type != FN_CTYPE) {
             fnObj = WrapGo(vm, &functab[i]);
         } else {

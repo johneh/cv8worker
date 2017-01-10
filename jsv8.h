@@ -6,7 +6,7 @@
 
 typedef void *js_worker;
 
-extern struct v8_fn_s *jsv8;
+extern struct v8_api_s *jsv8;
 
 extern v8_state js_vmopen(js_worker w);
 extern void js_vmclose(v8_state vm);
@@ -20,7 +20,5 @@ extern v8_val v8_callstr(v8_state vm, const char *source,
         v8_val self, int nargs, v8_val *args);
 
 extern int v8_gc(v8_state vm);
-
-extern v8_val v8_getbuffer(v8_state vm, v8_val val); /* argument: TypedArray */
 
 #endif

@@ -1,7 +1,7 @@
 #ifndef _VM_H
 #define _VM_H
 
-#define MAXARGS 12
+#define MAXARGS 13
 
 class PersistentStore;
 

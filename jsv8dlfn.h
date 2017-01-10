@@ -2,11 +2,11 @@
 #include "jsdef.h"
 
 #ifndef V8_BINDING   /* define in the main source before including this header */
-static const struct v8_fn_s *jsv8;
+static const struct v8_api_s *jsv8;
 
 #define JS_LOAD(vm, hlibobj) \
 v8_load_(vm, hlibobj, \
-        const struct v8_fn_s *const j8_, v8_ffn **fp_) {\
+        const struct v8_api_s *const j8_, v8_ffn **fp_) {\
     jsv8 = j8_;
 
 #define JS_EXPORT(t_) } do {\

@@ -1,5 +1,5 @@
 #include "jsv8dlfn.h"
-#include <gobject-light.h>
+#include <gobject-min.h>
 
 static v8_val do_ref(v8_state vm, int argc, v8_val argv[]) {
 void *p0 = V8_TOPTR(argv[0]);

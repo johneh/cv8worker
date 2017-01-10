@@ -64,20 +64,13 @@ typedef struct v8_ffn_s {
 } v8_ffn;
 
 
-struct v8_fn_s {
+struct v8_api_s {
     v8_val (*object)(v8_state vm);
     v8_val (*get)(v8_state vm, v8_val objval, const char *key);
     int (*set)(v8_state vm, v8_val hobj, const char *key, v8_val val);
     v8_val (*geti)(v8_state vm, v8_val objval, unsigned index);
     int (*seti)(v8_state vm, v8_val objval, unsigned index, v8_val val);
     v8_val (*array)(v8_state vm, int length);
-
-    /* V8 owns the Buffer memory. If ptr is not NULL, it must be
-     * compatible with ArrayBuffer::Allocator::Free. */
-    v8_val (*arraybuffer)(v8_state vm, void *ptr, size_t byte_length);
-    size_t (*bytelength)(v8_state vm, v8_val val);  /* ArrayBuffer(View) */
-    size_t (*byteoffset)(v8_state vm, v8_val val); /* ArrayBufferView */
-    void * (*buffer)(v8_state vm, v8_val abval); /* ArrayBuffer(View) */
 
     void (*reset)(v8_state vm, v8_val val);
 

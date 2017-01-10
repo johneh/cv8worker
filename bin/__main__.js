@@ -12,7 +12,9 @@
             isFirst = true;
             loader._cwd = null;
             loader._moduleCache = Object.create(null);
-            modulePath = loader.path = loader.path||'';
+            if (typeof loader.path !== 'string')
+                loader.path = '';
+            modulePath = loader.path;
             if ((i = argv.indexOf('-p')) >= 0 && argc > i && argv[i+1]) {
                 modulePath = argv[i+1];
                 if (loader.path)
@@ -32,9 +34,10 @@
                 delay |= 0;
                 if (delay < 0)
                     delay = 0;
-                $go(loader.msleep, delay).then(() => {
-                        callback();
-                    });
+                $co(loader.msleep, delay)
+                .then(() => {
+                    callback();
+                });
             };
 
             this.fdevent = loader.fdevent;
@@ -44,7 +47,7 @@
             this.$uId = function () {
                 return ++loader._uId;
             };
-            this.console = { log : $print };
+            this.console = { log: $print };
         } else
             modulePath = this.__path;	// this === parent module
 

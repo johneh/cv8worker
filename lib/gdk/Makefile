@@ -7,7 +7,8 @@ CLANG_DIR := /usr/include/clang/3.8
 #INCLUDES = -I. -I$(TOPDIR) -I$(MILL_INCLUDES) $(V8_INCLUDES)
 #LIBS = $(V8_LIBS) $(MILL_LIBS_STATIC) -lm -lstdc++
 
-all: libxlibjs.so
+all: libgobject.so libgdk-pixbuf.so libgdk-pixbuf-loader.so \
+libpixbuf-await.so
 
 SO_CFLAGS = -fPIC -Wall -c -g -I. -I$(TOPDIR)
 SO_LDFLAGS = -shared
