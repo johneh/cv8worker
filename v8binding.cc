@@ -60,6 +60,16 @@ char *GetExceptionString(Isolate* isolate, TryCatch* try_catch) {
     s.append(":");
     s.append(linenum_string);
     s.append(exception_string);
+    s.append("\n");
+    Local<Value> stack_trace_string;
+    if (try_catch->StackTrace(isolate->GetCurrentContext())
+            .ToLocal(&stack_trace_string) &&
+            stack_trace_string->IsString()) {
+        String::Utf8Value stack_trace(Local<String>::Cast(stack_trace_string));
+        if (*stack_trace)
+            s.append(*stack_trace);
+        s.append("\n");
+    }
   }
   return estrdup(s.c_str(), s.length());
 }
@@ -92,6 +102,8 @@ static v8_val v8_ctypestr(const char *stp, unsigned stlen);
 
 static int SetFinalizer(v8_state vm, v8Object ptrObj, Fnfree free_func);
 
+//#define GET_VM(isolate_) (reinterpret_cast<v8_state>((isolate_)->GetData(0)))
+
 static inline void DeletePersister(v8_state vm, v8_handle h) {
     if (h > NUM_PERMANENT_HANDLES)
         vm->store_->Dispose(h);
@@ -102,8 +114,35 @@ static inline void DeletePersister(v8_state vm, v8_handle h) {
 
 #define GetValueFromPersister(vm, h)    (vm)->store_->Get(h)
 
+#define ISOLATE_SCOPE(args_, isolate_) \
+    Isolate *isolate_ = args_.GetIsolate(); \
+    HandleScope handle_scope(isolate_);
+
+/*
 static void Panic(const char *errstr) {
     fprintf(stderr, "%s\n", errstr);
+    abort();
+    exit(1);
+}
+*/
+
+static void panic(Isolate *isolate,
+            const char *errstr, const char *prefix) {
+    fprintf(stderr, "fatal error: ");
+    if(prefix)
+        fprintf(stderr, "%s:", prefix);
+    fprintf(stderr, "%s\n", errstr);
+    Local<StackTrace> stack_trace = StackTrace::CurrentStackTrace(isolate, 5);
+    int n = stack_trace->GetFrameCount();
+    for (int i = 0; i < n; i++) {
+        Local<StackFrame> stack_frame = stack_trace->GetFrame(i);
+        String::Utf8Value script_name(stack_frame->GetScriptName());
+        String::Utf8Value func_name(stack_frame->GetFunctionName());
+        fprintf(stderr, "\tat %s (%.*s:%d)\n",
+            func_name.length() ? *func_name : "<anonymous>",
+            script_name.length(), *script_name,
+            stack_frame->GetLineNumber());
+    }
     abort();
     exit(1);
 }
@@ -188,7 +227,8 @@ static void send_go(Go_s *g) {
     int rc = mill_pipesend(g->vm->inq, (void *) &g);
     if (rc == -1) {
         fprintf(stderr, "v8binding.cc:send_go(): writing to pipe failed\n");
-        Panic(strerror(errno));
+        fprintf(stderr, "reason: %s\n", strerror(errno));
+        abort();
     }
 }
 
@@ -205,20 +245,19 @@ coroutine static void do_cgo(v8_state vm, v8_coro cr, int argc, v8_val args[]) {
 static v8_ffn cgodef = { 0, (void *) do_cgo, "__cgo__", FN_CORO };
 
 static Go_s *coro_s(const FunctionCallbackInfo<Value>& args) {
+    ISOLATE_SCOPE(args, isolate)
     Go_s *g;
     v8_state vm;
-    Isolate *isolate = args.GetIsolate();
-    HandleScope handle_scope(isolate);
     int argc = args.Length();
     if (argc < 1)
-        Panic("not enough arguments");
+        panic(isolate, "goroutine argument expected", NULL);
     vm = reinterpret_cast<v8_state>(isolate->GetData(0));
     v8_ffn *fndef;
 
     v8Object coro = ToGo(args[0]);
     if (coro.IsEmpty()) {
-        if (GetObjectId(vm, args[0]) != V8EXTFUNC)
-            Panic("coroutine argument #1 expected");
+        if (GetObjectId(args[0]) != V8EXTFUNC)
+            panic(isolate, "goroutine argument expected", NULL);
         // use the do_cgo wrapper.
         fndef = reinterpret_cast<v8_ffn *>(
                     v8External::Cast(
@@ -232,13 +271,14 @@ static Go_s *coro_s(const FunctionCallbackInfo<Value>& args) {
 
     if (fndef->type == FN_COROPUSH) {
         if (argc < 2 || !args[argc-1]->IsFunction())
-            Panic("coroutine callback (last argument) is not a function");
+            panic(isolate, "goroutine callback is not a function", fndef->name);
         argc--;
     }
 
     argc--;
     if (argc != fndef->pcount)
-        Panic("coroutine called with incorrect number of arguments");
+        panic(isolate,
+            "goroutine called with incorrect number of arguments", fndef->name);
 
     g = new Go_s;
     g->vm = vm;
@@ -342,7 +382,7 @@ static bool RunGoCallback(v8_state vm, GoCallback *cb) {
 
     v8Value retv = ctype_to_v8(vm, &cb->result);    // V8_VOID return -> JS undefined 
     if (retv.IsEmpty()) // invalid persistent handle
-        Panic("$go: received invalid resolve value");
+        panic(isolate, "received invalid value from goroutine", fndef->name);
 
     if (fndef->type == FN_CORO) {
         ResolveGo(isolate, g, retv);
@@ -440,10 +480,9 @@ static v8Object WrapFunc(v8_state vm, v8_ffn *func_item) {
 }
 
 static void Print(const FunctionCallbackInfo<Value>& args) {
+    ISOLATE_SCOPE(args, isolate)
     bool first = true;
     int errcount = 0;
-    Isolate *isolate = args.GetIsolate();
-    HandleScope handle_scope(isolate);
 
     assert(!isolate->GetCurrentContext().IsEmpty());
 
@@ -472,46 +511,42 @@ static void Print(const FunctionCallbackInfo<Value>& args) {
 }
 
 static void Now(const FunctionCallbackInfo<Value>& args) {
-    Isolate *isolate = args.GetIsolate();
-    HandleScope handle_scope(isolate);
+    ISOLATE_SCOPE(args, isolate)
     int64_t n = now();
     args.GetReturnValue().Set(Number::New(isolate, n));
 }
 
 static void Close(const FunctionCallbackInfo<Value>& args) {
-    Isolate *isolate = args.GetIsolate();
-    HandleScope handle_scope(isolate);
+    ISOLATE_SCOPE(args, isolate)
     v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
     mill_pipeclose(vm->inq);
 }
 
 // $eval(string, origin) -- Must compile and run.
 static void EvalString(const FunctionCallbackInfo<Value>& args) {
-    Isolate *isolate = args.GetIsolate();
-    HandleScope handle_scope(isolate);
-
+    ISOLATE_SCOPE(args, isolate)
     int argc = args.Length();
-    if (argc < 2 || !args[0]->IsString()) {
-        Panic("$eval: invalid argument(s)");
-    }
+    if (argc < 2 || !args[0]->IsString())
+        panic(isolate, "$eval: invalid argument(s)", NULL);
     v8Context context = isolate->GetCurrentContext();
     TryCatch try_catch(isolate);
     v8String source = v8String::Cast(args[0]);
     v8String name;
     if (!args[1]->ToString(context).ToLocal(&name)) {
-        Panic(GetExceptionString(isolate, &try_catch));
+        fprintf(stderr, "fatal error: %s\n", GetExceptionString(isolate, &try_catch));
+        exit(1);
     }
 
     ScriptOrigin origin(name);
     v8Script script;
     if (!Script::Compile(context, source, &origin).ToLocal(&script)) {
         // XXX: don't panic
-        fprintf(stderr, "%s\n", GetExceptionString(isolate, &try_catch));
+        fprintf(stderr, "fatal error: %s\n", GetExceptionString(isolate, &try_catch));
         exit(1);
     }
     v8Value result;
     if (!script->Run(context).ToLocal(&result)) {
-        fprintf(stderr, "%s\n", GetExceptionString(isolate, &try_catch));
+        fprintf(stderr, "fatal error: %s\n", GetExceptionString(isolate, &try_catch));
         exit(1);
     }
     assert(!result.IsEmpty());
@@ -521,9 +556,8 @@ static void EvalString(const FunctionCallbackInfo<Value>& args) {
 // malloc(size [, zerofill] )
 // TODO: adjust GC allocation amount.
 static void Malloc(const v8::FunctionCallbackInfo<v8::Value>& args) {
+    ISOLATE_SCOPE(args, isolate)
     int argc = args.Length();
-    Isolate *isolate = args.GetIsolate();
-    HandleScope handle_scope(isolate);
     ThrowNotEnoughArgs(isolate, argc < 1);
     v8Context context = isolate->GetCurrentContext();
     int size = args[0]->Int32Value(context).FromJust();
@@ -539,38 +573,34 @@ static void Malloc(const v8::FunctionCallbackInfo<v8::Value>& args) {
 
 // $isPointer(v [, isNotNull = false])
 static void IsPointer(const FunctionCallbackInfo<Value>& args) {
+    ISOLATE_SCOPE(args, isolate)
     int argc = args.Length();
-    Isolate *isolate = args.GetIsolate();
-    HandleScope handle_scope(isolate);
-    ThrowNotEnoughArgs(isolate, argc < 1);
-    v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
-    bool r = (GetObjectId(vm, args[0]) == V8EXTPTR);
-    if (r && argc > 1 && args[1]->BooleanValue(
-                isolate->GetCurrentContext()).FromJust()) {
-        void *ptr = v8External::Cast(v8Object::Cast(args[0])
-                            -> GetInternalField(1))->Value();
-        if (!ptr)
-            r = false;   
+    bool r = false;
+    if (argc > 0) {
+        r = (GetObjectId(args[0]) == V8EXTPTR);
+        if (r && argc > 1 && args[1]->BooleanValue(
+                    isolate->GetCurrentContext()).FromJust()) {
+            void *ptr = v8External::Cast(v8Object::Cast(args[0])
+                                -> GetInternalField(1))->Value();
+            if (!ptr)
+                r = false;
+        }
     }
-
     args.GetReturnValue().Set(Boolean::New(isolate, r));
 }
 
 static void StrError(const v8::FunctionCallbackInfo<v8::Value>& args) {
-    Isolate *isolate = args.GetIsolate();
-    HandleScope handle_scope(isolate);
-    v8Context context = isolate->GetCurrentContext();
+    ISOLATE_SCOPE(args, isolate)
     int errnum;
     if (args.Length() > 0)
-        errnum = args[0]->Int32Value(context).FromJust();
+        errnum = args[0]->Int32Value(isolate->GetCurrentContext()).FromJust();
     else
         errnum = errno;
     args.GetReturnValue().Set(v8STR(isolate, strerror(errnum)));
 }
 
 static void ByteLength(const v8::FunctionCallbackInfo<v8::Value>& args) {
-    Isolate *isolate = args.GetIsolate();
-    HandleScope handle_scope(isolate);
+    ISOLATE_SCOPE(args, isolate)
     ThrowNotEnoughArgs(isolate, args.Length() < 1);
     unsigned len = 0;    // maybe < 0 (for Opaque pointer or overflow otherwise).
 
@@ -593,26 +623,25 @@ static void ByteLength(const v8::FunctionCallbackInfo<v8::Value>& args) {
 
 // utf8String(obj, length = -1)
 static void utf8String(const FunctionCallbackInfo<Value>& args) {
+    ISOLATE_SCOPE(args, isolate)
     int argc = args.Length();
-    Isolate *isolate = args.GetIsolate();
-    HandleScope handle_scope(isolate);
-    ThrowNotEnoughArgs(isolate, argc < 1);
-    v8_state vm = reinterpret_cast<v8_state>(isolate->GetData(0));
     v8Context context = isolate->GetCurrentContext();
-    v8Object obj = args[0]->ToObject(context).ToLocalChecked();
-
     void *ptr = nullptr;
     int maxLength = -1;
-    if (obj->IsArrayBuffer()) {
-        ArrayBuffer::Contents c = v8ArrayBuffer::Cast(obj)->GetContents();
-        ptr = c.Data();
-        maxLength = (int) c.ByteLength();
-    } else if (GetObjectId(vm, obj) == V8EXTPTR) {
-        ptr = v8External::Cast(obj->GetInternalField(1))->Value();
+
+    if (argc > 0) {
+        v8Object obj = args[0]->ToObject(context).ToLocalChecked();
+
+        if (obj->IsArrayBuffer()) {
+            ArrayBuffer::Contents c = v8ArrayBuffer::Cast(obj)->GetContents();
+            ptr = c.Data();
+            maxLength = (int) c.ByteLength();
+        } else if (GetObjectId(obj) == V8EXTPTR) {
+            ptr = v8External::Cast(obj->GetInternalField(1))->Value();
+        }
     }
-    if (!ptr) {
-        ThrowTypeError(isolate, "utf8String: invalid argument");
-    }
+    if (!ptr)
+        ThrowTypeError(isolate, "$utf8String: invalid argument");
 
     int byteLength = -1;
     if (maxLength < 0) {    // pointer
@@ -636,9 +665,8 @@ static void utf8String(const FunctionCallbackInfo<Value>& args) {
 
 //$toarraybuffer(string)
 static void ToArrayBuffer(const FunctionCallbackInfo<Value>& args) {
+    ISOLATE_SCOPE(args, isolate)
     int argc = args.Length();
-    Isolate *isolate = args.GetIsolate();
-    HandleScope handle_scope(isolate);
     if (argc < 1 || !args[0]->IsString())
         ThrowTypeError(isolate, "string argument expected");
     v8String s = v8String::Cast(args[0]);
@@ -650,18 +678,17 @@ static void ToArrayBuffer(const FunctionCallbackInfo<Value>& args) {
 
 static void CallForeignFunc(
         const v8::FunctionCallbackInfo<v8::Value>& args) {
-
-    Isolate *isolate = args.GetIsolate();
-    HandleScope handle_scope(isolate);
+    ISOLATE_SCOPE(args, isolate)
     v8_state vm = reinterpret_cast<v8_state>(isolate->GetData(0));
-
     v8Object obj = args.Holder();
     assert(obj->InternalFieldCount() == 2);
     v8_ffn *func_wrap = reinterpret_cast<v8_ffn *>(
                 v8External::Cast(obj->GetInternalField(1))->Value());
     int argc = args.Length();
-    if (argc > MAXARGS || argc != func_wrap->pcount)
-        Panic("C-type function: incorrect number of arguments");
+    if (argc != func_wrap->pcount)
+        panic(isolate,
+            "C-type function called with incorrect number of arguments",
+            func_wrap->name);
 
     assert(func_wrap->type == FN_CTYPE);
 
@@ -682,7 +709,7 @@ static void CallForeignFunc(
     }
     v8Value retv = ctype_to_v8(vm, &retval);
     if (retv.IsEmpty()) // invalid persistent handle
-        Panic("received invalid return value from C-function");
+        panic(isolate, "received invalid return value", func_wrap->name);
     args.GetReturnValue().Set(retv);
     v8_reset(vm, retval);
 }
@@ -690,9 +717,8 @@ static void CallForeignFunc(
 // ArrayBuffer.transfer()?
 // $transfer(oldBuffer, newByteLength)
 static void Transfer(const FunctionCallbackInfo<Value>& args) {
+    ISOLATE_SCOPE(args, isolate)
     int argc = args.Length();
-    Isolate *isolate = args.GetIsolate();
-    HandleScope handle_scope(isolate);
     ThrowNotEnoughArgs(isolate, argc < 2);
 
     /* XXX: IsNeuterable() == false if SharedArrayBuffer ? */
@@ -770,9 +796,8 @@ v8_state js8_vmnew(mill_worker w) {
 
 static void GlobalGet(v8Name name,
         const PropertyCallbackInfo<Value>& info) {
-    Isolate *isolate = info.GetIsolate();
+    ISOLATE_SCOPE(info, isolate)
     v8_state vm = reinterpret_cast<v8_state>(isolate->GetData(0));
-    HandleScope handle_scope(isolate);
     String::Utf8Value str(name);
     if (strcmp(*str, "$errno") == 0)
         info.GetReturnValue().Set(Integer::New(isolate, errno));
@@ -782,8 +807,7 @@ static void GlobalGet(v8Name name,
 
 static void GlobalSet(v8Name name, v8Value val,
         const PropertyCallbackInfo<void>& info) {
-    Isolate *isolate = info.GetIsolate();
-    HandleScope handle_scope(isolate);
+    ISOLATE_SCOPE(info, isolate)
     String::Utf8Value str(name);
     if (strcmp(*str, "$errno") == 0)
         errno = val->ToInt32(
@@ -868,7 +892,7 @@ static v8_val CallFunc(struct js8_cmd_s *cmd) {
         v1 = ctype_to_v8(vm, &cmd->h1);
     }
     if (v1.IsEmpty() || !v1->IsFunction())
-        Panic("v8_call: function argument #1 expected");
+        panic(isolate, "C api: function argument #1 expected", NULL);
     v8Function func = v8Function::Cast(v1);
 
     int argc = cmd->nargs;
@@ -877,7 +901,7 @@ static v8_val CallFunc(struct js8_cmd_s *cmd) {
     TryCatch try_catch(isolate);
     v8Value v = ctype_to_v8(vm, &cmd->h2);
     if (v.IsEmpty())
-        Panic("v8_call: invalid handle for 'this'");
+        panic(isolate, "C api: invalid handle for 'this'", NULL);
     v8Object self = v->ToObject(context).ToLocalChecked();
 
     v8Value argv[4];
@@ -885,7 +909,7 @@ static v8_val CallFunc(struct js8_cmd_s *cmd) {
     for (i = 0; i < argc; i++) {
         argv[i] = ctype_to_v8(vm, &cmd->a[i]);
         if (argv[i].IsEmpty())
-            Panic("v8_call: invalid handle for argument");
+            panic(isolate, "C api: invalid handle for argument", NULL);
     }
 
     v8Value result = func->Call(
@@ -931,7 +955,8 @@ int js8_do(struct js8_cmd_s *cmd) {
 #endif
         break;
     default:
-        Panic("js8_do(): received unexpected code");
+        fprintf(stderr, "fatal error: js8_do(): received unexpected code\n");
+        abort();
     }
     return 1;
 }
@@ -940,7 +965,7 @@ int js8_do(struct js8_cmd_s *cmd) {
 ////////////////////////////// C-type ///////////////////////////
 
 static void v8_panic(const char *msg, const char *funcname) {
-    fprintf(stderr, "Panic:%s:%s\n", funcname, msg);
+    fprintf(stderr, "fatal error:%s:%s\n", funcname, msg);
     abort();
     exit(1);
 }
@@ -977,7 +1002,7 @@ static void v8_to_ctype(v8_state vm, v8Value v, v8_val *ctval) {
         int len = s->WriteUtf8(p, utf8len);
         p[len] = '\0';
         ctval->stp = p;
-    } else if (GetObjectId(vm, v) == V8EXTPTR) {
+    } else if (GetObjectId(v) == V8EXTPTR) {
         // XXX: optimize: check nullptr?
         ctval->type = V8_CTYPE_PTR;
         ctval->hndle = NewPersister(vm, v);
@@ -1190,7 +1215,8 @@ static void CreateIsolate(v8_state vm) {
 
     v8Context context = Context::New(isolate, NULL, global);
     if (context.IsEmpty()) {
-        Panic("failed to create a V8 context");
+        fprintf(stderr, "fatal: failed to create a V8 context\n");
+        exit(1);
     }
 
     vm->context.Reset(isolate, context);
@@ -1293,10 +1319,10 @@ static v8_val v8_get(v8_state vm, v8_val hobj, const char *key) {
 
     v8Value v1 = ctype_to_v8(vm, &hobj);
     if (v1.IsEmpty())
-        Panic("get: invalid handle");
+        panic(isolate, "get: invalid handle", NULL);
     if (!v1->IsObject()) {
         //v1 = v1->ToObject(context).ToLocalChecked();
-        Panic("get: not an object");
+        panic(isolate, "get: not an object", NULL);
     }
     v8Object obj = v8Object::Cast(v1);
     v8Value v2 = obj->Get(context,
@@ -1316,9 +1342,9 @@ static int v8_set(v8_state vm, v8_val hobj,
     v8Value v2 = ctype_to_v8(vm, &ctval);
     v8Value v1 = ctype_to_v8(vm, &hobj);
     if (v1.IsEmpty() || v2.IsEmpty())
-        Panic("set: invalid handle");
+        panic(isolate, "set: invalid handle", NULL);
     if (!v1->IsObject())
-        Panic("set: not an object");
+        panic(isolate, "set: not an object", NULL);
     if (!v2->IsUndefined()) {
         v8Object obj = v8Object::Cast(v1);
         return obj->Set(context,
@@ -1340,9 +1366,9 @@ static v8_val v8_geti(v8_state vm, v8_val hobj, unsigned index) {
     LOCK_SCOPE(isolate)
     v8Value v1 = ctype_to_v8(vm, &hobj);
     if (v1.IsEmpty())
-        Panic("geti: invalid handle");
+        panic(isolate, "geti: invalid handle", NULL);
     if (!v1->IsObject())
-        Panic("geti: not an object");
+        panic(isolate, "geti: not an object", NULL);
     v8Object obj = v8Object::Cast(v1);
 
     // Undefined for nonexistent index.
@@ -1363,9 +1389,9 @@ static int v8_seti(v8_state vm, v8_val hobj,
     v8Value v1 = ctype_to_v8(vm, &hobj);
     v8Value v2 = ctype_to_v8(vm, &ctval);
     if (v1.IsEmpty() || v2.IsEmpty())
-        Panic("seti: invalid handle");
+        panic(isolate, "seti: invalid handle", NULL);
     if (!v1->IsObject())
-        Panic("seti: not an object");
+        panic(isolate, "seti: not an object", NULL);
     v8Object obj = v8Object::Cast(v1);
     if (! v2->IsUndefined())
         return obj->Set(context, index, v2).FromJust();
@@ -1374,10 +1400,11 @@ static int v8_seti(v8_state vm, v8_val hobj,
 
 // Import a C function.
 static v8_val v8_cfunc(v8_state vm, const v8_ffn *func_item) {
-    if (func_item->pcount > MAXARGS)
-        Panic("v8_cfunc: too many function parameters");
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate);
+    if (func_item->pcount > MAXARGS)
+        panic(isolate, "C-type function with too many parameters",
+                func_item->name);
     v8Context context = v8Context::New(isolate, vm->context);
     Context::Scope context_scope(context);
     v8Object fnObj;
@@ -1499,7 +1526,7 @@ void Gc(const FunctionCallbackInfo<Value>& args) {
     HandleScope handle_scope(isolate);
     v8Object obj = args.Holder();
     v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
-    if (GetObjectId(vm, obj) != V8EXTPTR)
+    if (GetObjectId(obj) != V8EXTPTR)
         ThrowTypeError(isolate, "gc: not a pointer");
 
     void *ptr = v8External::Cast(obj->GetInternalField(1))->Value();
@@ -1512,7 +1539,7 @@ void Gc(const FunctionCallbackInfo<Value>& args) {
         args.GetReturnValue().Set(obj);
         return;
     }
-    if (GetObjectId(vm, args[0]) == V8EXTFUNC) {
+    if (GetObjectId(args[0]) == V8EXTFUNC) {
         v8_ffn *func_item = reinterpret_cast<v8_ffn *>(
                 v8External::Cast(
                         v8Object::Cast(args[0])->GetInternalField(1)
@@ -1575,10 +1602,8 @@ typedef int (*Fnload)(v8_state, v8_val, v8_api_s *const, v8_ffn **);
 // done in the JS.
 
 static void Load(const FunctionCallbackInfo<Value>& args) {
-    Isolate *isolate = args.GetIsolate();
-    HandleScope handle_scope(isolate);
-    v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
-
+    ISOLATE_SCOPE(args, isolate)
+    v8_state vm = reinterpret_cast<v8_state>(isolate->GetData(0));
     int argc = args.Length();
     ThrowNotEnoughArgs(isolate, argc < 1);
     v8Context context = isolate->GetCurrentContext();
@@ -1617,7 +1642,8 @@ static void Load(const FunctionCallbackInfo<Value>& args) {
     for (int i = 0; i < nfunc && functab[i].name; i++) {
         v8Object fnObj;
         if (functab[i].pcount > MAXARGS)
-            Panic("$load: too many function parameters");
+            panic(isolate, "$load: C function with too many parameters",
+                functab[i].name);
         if (functab[i].type != FN_CTYPE) {
             fnObj = WrapGo(vm, &functab[i]);
         } else {

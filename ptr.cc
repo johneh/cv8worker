@@ -49,8 +49,7 @@ static void Free(const FunctionCallbackInfo<Value>& args) {
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
     v8Object obj = args.Holder();
-    v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
-    if (GetObjectId(vm, obj) != V8EXTPTR)
+    if (GetObjectId(obj) != V8EXTPTR)
         ThrowTypeError(isolate, "free: not a pointer");
     void *ptr = v8External::Cast(obj->GetInternalField(1))->Value();
     if (ptr && !IsCtypeWeak(obj)) {
@@ -63,9 +62,8 @@ static void Free(const FunctionCallbackInfo<Value>& args) {
 static void NotNull(const FunctionCallbackInfo<Value>& args) {
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
-    v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
     v8Object obj = args.Holder();
-    if (GetObjectId(vm, obj) != V8EXTPTR)
+    if (GetObjectId(obj) != V8EXTPTR)
         ThrowTypeError(isolate, "notNull: not a pointer");
     void *ptr = v8External::Cast(obj->GetInternalField(1))->Value();
     if (!ptr)
@@ -582,7 +580,7 @@ void Pack(const FunctionCallbackInfo<Value>& args) {
         ptr = (char *) c.Data();
         if (ptr)
             ps.end = ptr + c.ByteLength();
-    } else if (GetObjectId((v8_state) isolate->GetData(0), obj) == V8EXTPTR) {
+    } else if (GetObjectId(obj) == V8EXTPTR) {
         ptr = (char *) v8External::Cast(obj->GetInternalField(1))->Value();
     }
     if (!ptr) {
@@ -623,7 +621,7 @@ void Unpack(const FunctionCallbackInfo<Value>& args) {
         ptr = (char *) c.Data();
         if (ptr)
             ps.end = ptr + c.ByteLength();
-    } else if (GetObjectId((v8_state) isolate->GetData(0), obj) == V8EXTPTR) {
+    } else if (GetObjectId(obj) == V8EXTPTR) {
         ptr = (char *)v8External::Cast(obj->GetInternalField(1))->Value();
     }
     if (!ptr) {
