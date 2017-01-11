@@ -102,8 +102,6 @@ static v8_val v8_ctypestr(const char *stp, unsigned stlen);
 
 static int SetFinalizer(v8_state vm, v8Object ptrObj, Fnfree free_func);
 
-//#define GET_VM(isolate_) (reinterpret_cast<v8_state>((isolate_)->GetData(0)))
-
 static inline void DeletePersister(v8_state vm, v8_handle h) {
     if (h > NUM_PERMANENT_HANDLES)
         vm->store_->Dispose(h);
@@ -148,6 +146,40 @@ static void panic(Isolate *isolate,
 }
 
 ////////////////////////////////// Coroutine //////////////////////////////////
+
+static void promise_reject_callback(PromiseRejectMessage message) {
+    Local<Promise> promise = message.GetPromise();
+    Isolate* isolate = promise->GetIsolate();
+    HandleScope handle_scope(isolate);
+    v8_state vm = reinterpret_cast<v8_state>(isolate->GetData(0));
+    v8Context context = v8Context::New(isolate, vm->context);
+    Context::Scope context_scope(context);
+    v8Value exception = message.GetValue();
+    Local<Integer> event = Integer::New(isolate, message.GetEvent());
+
+    v8Function callback = v8Function::Cast(
+            GetValueFromPersister(vm, vm->on_promise_reject));
+    if (exception.IsEmpty())
+        exception = Undefined(isolate);
+    v8Value args[] = { event, promise, exception };
+    callback->Call(context->Global(), 3, args);
+}
+
+  /** v8.h:
+   * Set callback to notify about promise reject with no handler, or
+   * revocation of such a previous notification once the handler is added.
+   */
+
+static void OnPromiseReject(const FunctionCallbackInfo<Value>& args) {
+    ISOLATE_SCOPE(args, isolate)
+    v8_state vm = reinterpret_cast<v8_state>(isolate->GetData(0));
+    int argc = args.Length();
+    if (argc > 0 && args[0]->IsFunction() && !vm->on_promise_reject) {
+        isolate->SetPromiseRejectCallback(promise_reject_callback);
+        vm->on_promise_reject = NewPersister(vm, args[0]);
+    }
+}
+
 
 #define GOROUTINE_INTERNAL_FIELD_COUNT 2
 enum {
@@ -422,7 +454,24 @@ static bool RunGoCallback(v8_state vm, GoCallback *cb) {
         return FinishGo(vm, cb);
     }
 
-    /* XXX: swallow intermediate exceptions !!! */
+
+    // log intermediate exceptions with PromiseRejectCallback.
+    if (try_catch.HasCaught() && try_catch.CanContinue()
+                && vm->on_promise_reject) {
+        Local<v8::Promise::Resolver> pr =
+            Local<v8::Promise::Resolver>::Cast(GetValueFromPersister(vm, g->hpr));
+        v8Value exception = try_catch.Exception();
+        // See PromiseRejectMessage in v8.h. Using PromiseRejectEvent
+        // kPromiseRejectWithNoHandler. XXX: create our own event ?
+        Local<Integer> event = Integer::New(isolate, kPromiseRejectWithNoHandler);
+        v8Function callback = v8Function::Cast(
+            GetValueFromPersister(vm, vm->on_promise_reject));
+        if (exception.IsEmpty())
+            exception = Undefined(isolate);
+        v8Value args[] = { event, pr->GetPromise(), exception };
+        callback->Call(context->Global(), 3, args);
+    }
+
     v8_reset(vm, cb->result);
     delete cb;
     return false;
@@ -1212,6 +1261,8 @@ static void CreateIsolate(v8_state vm) {
                 FunctionTemplate::New(isolate, Pack));
     global->Set(v8STR(isolate, "$unpack"),
                 FunctionTemplate::New(isolate, Unpack));
+    global->Set(v8STR(isolate, "$$onPromiseReject"),
+                FunctionTemplate::New(isolate, OnPromiseReject));
 
     v8Context context = Context::New(isolate, NULL, global);
     if (context.IsEmpty()) {
@@ -1291,6 +1342,7 @@ static void CreateIsolate(v8_state vm) {
     assert(h1 == NULL_HANDLE);
     h1 = NewPersister(vm, nullptr_obj);
     assert(h1 == NULLPTR_HANDLE);
+    vm->on_promise_reject = 0;
 }
 
 // Runs in the worker(V8) thread.

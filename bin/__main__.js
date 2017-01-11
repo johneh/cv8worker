@@ -40,14 +40,20 @@
                 });
             };
 
-            this.fdevent = loader.fdevent;
+            this.$fdevent = loader.fdevent;
 
-            // unique Id (for use as ctypeid etc.) 
-            loader._uId = 0;
-            this.$uId = function () {
-                return ++loader._uId;
-            };
             this.console = { log: $print };
+
+            this.$$onPromiseReject(function(event, promise, err) {
+                // event -- v8.h
+                //  kPromiseRejectWithNoHandler = 0,
+                //  kPromiseHandlerAddedAfterReject = 1
+                if (event === 0)
+                    $print('unhandled rejection:', promise, err.stack);
+                else
+                    $print('handler added after rejection:', promise, err.stack);
+            });
+
         } else
             modulePath = this.__path;	// this === parent module
 
