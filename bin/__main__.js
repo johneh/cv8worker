@@ -49,9 +49,9 @@
                 //  kPromiseRejectWithNoHandler = 0,
                 //  kPromiseHandlerAddedAfterReject = 1
                 if (event === 0)
-                    $print('unhandled rejection:', promise, err.stack);
+                    console.log('Unhandled rejection:', promise, err.stack);
                 else
-                    $print('handler added after rejection:', promise, err.stack);
+                    console.log('Post-rejection handler:', promise, err.stack);
             });
 
         } else
