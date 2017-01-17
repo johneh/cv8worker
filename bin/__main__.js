@@ -10,7 +10,7 @@
 
         if (! loader.hasOwnProperty('__main__')) {
             isFirst = true;
-            loader._cwd = null;
+            loader.CWD = null;
             loader._moduleCache = Object.create(null);
             if (typeof loader.path !== 'string')
                 loader.path = '';
@@ -24,7 +24,7 @@
 
             this.DLL = dlloader();
             this.$loadlib = function (libname) {
-                return new DLL(libname, loader._cwd).identifiers;
+                return new DLL(libname, loader.CWD).identifiers;
             };
 
             this.setTimeout = function (callback, delay) {
@@ -54,6 +54,20 @@
                     console.log('Post-rejection handler:', promise, err.stack);
             });
 
+            // function expression
+            loader.atexit = `(
+function (a) {
+    for(let i=0; i<a.length; i++) {
+        a[i].callback.call(null, ...a[i].data);
+    }
+})`;
+
+            // atexit function argument
+            loader.atexitData = [];
+            this.$atExit = function (fn, ...args) {
+                loader.atexitData.push({ callback: fn, data: args });
+            };
+            // this.$atExit(function() { $print('All Done!!');});
         } else
             modulePath = this.__path;	// this === parent module
 
@@ -105,11 +119,12 @@
 
         cache[filename] = module;
         const moduleWrap = $eval(moduleSource, path);
-        const lastDir = loader._cwd;
-        loader._cwd = dirname;
+        const lastDir = loader.CWD;
+        loader.CWD = dirname;
         const require = function (path) {
             return load.call(module, loader, [ "-f", path ]);
         };
+
         moduleWrap.call(exports,
                 exports,
                 require,
@@ -117,14 +132,13 @@
                 filename,
                 dirname
         );
-        loader._cwd = lastDir;
-
+        loader.CWD = lastDir;
         return module.exports;
     }; // load
 
     const _findFile = function (path, loader) {
-        if (/^\.\.?\//.test(path) && loader._cwd)
-            path = loader._cwd + '/' + path;
+        if (/^\.\.?\//.test(path) && loader.CWD)
+            path = loader.CWD + '/' + path;
         let found = loader.isRegularFile(path);
         if (! found && path.lastIndexOf('.js') < 0) {
             path += '.js';

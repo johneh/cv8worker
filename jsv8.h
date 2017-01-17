@@ -9,7 +9,7 @@ typedef void *js_worker;
 extern struct v8_api_s *jsv8;
 
 extern v8_state js_vmopen(js_worker w);
-extern void js_vmclose(v8_state vm);
+extern void js_vmclose(v8_state vm, const char *onexit, v8_val onexit_arg);
 
 extern v8_val v8_eval(v8_state vm, const char *src);
 extern int v8_run(v8_state vm, const char *src);

@@ -29,11 +29,18 @@ v8_state js_vmopen(js_worker jw) {
     return vm;
 }
 
-void js_vmclose(v8_state vm) {
-    /* Close the write end of the pipe from the V8 thread. */
-    (void) v8_run(vm, "$close();");
+void js_vmclose(v8_state vm, const char *onexit, v8_val onexit_arg) {
+    struct js8_cmd_s c;
+    c.type = V8SHUTDOWN;
+    c.vm = vm;
+    c.h1.stp = (char *) onexit;
+    c.a[0] = onexit_arg;
+    c.nargs = 1;
+    c.h2 = V8_GLOBAL;
+    task_run(WORKER(vm), (void *) js8_do, &c, -1);
     js8_vmclose(vm);
 }
+
 
 static int v8_sched(struct js8_cmd_s *cmd) {
     if (mill_isself(WORKER(cmd->vm)))

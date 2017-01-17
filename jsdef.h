@@ -81,6 +81,9 @@ struct v8_api_s {
     v8_val (*callstr)(v8_state vm, const char *source,
             v8_val hself, int nargs, v8_val *args);
 
+    v8_val (*call)(v8_state vm, v8_val hfunc,
+            v8_val hself, int nargs, v8_val *args);
+
     /* private */
     v8_val *global_;
     v8_val *null_;

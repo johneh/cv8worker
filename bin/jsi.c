@@ -176,21 +176,28 @@ int main(int argc, char **argv) {
 
     v8_val args[] = { loader, hargs };
     v8_val retval = jsv8->callstr(vm, s, V8_GLOBAL, 2, args);
-    if (V8_ISERROR(retval)) {
-        fprintf(stderr, "%s\n", V8_ERRSTR(retval));
-        exit(1);
-    }
+
 
 //    finished = 1;
 //   mill_wgwait(wg, -1);
+
+    v8_val atexit_code = jsv8->get(vm, loader, "atexit");
+    v8_val atexit_data = jsv8->get(vm, loader, "atexitData");
 
     jsv8->reset(vm, retval);
     jsv8->reset(vm, loader);
     jsv8->reset(vm, hargs);
 
-    js_vmclose(vm);
+    js_vmclose(vm, V8_TOSTR(atexit_code), atexit_data);
+
+    if (V8_ISERROR(retval)) {
+        fprintf(stderr, "%s\n", V8_ERRSTR(retval));
+        exit(1);
+    }
+
     mill_worker_delete(w);
     mill_fini();
+
     return 0;
 }
 

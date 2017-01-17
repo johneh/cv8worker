@@ -67,15 +67,16 @@ fetch({ host: 'news.google.com', schema: 'https'} )
 fetch({ host:'www.google.com'})
 .then((resp) => {
     let bytesReceived = 0;
+    function perror(err) {
+            console.log(err.stack);
+    };
 
     // headers() is optional (always received first anyway see fetch.js)
     resp.headers()
     .then((h) => {
         // $print(h);
         resp.readBodyData()
-        .catch(function perror(err) {
-            console.log(err.stack);
-        })
+        .catch(perror)
         .then(function process(result) {
             bytesReceived += $length(result.value);
             // console.log('Received', bytesReceived, 'bytes of data so far');

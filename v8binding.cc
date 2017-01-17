@@ -188,10 +188,11 @@ enum {
     GoReject = (1 << 2),
 };
 
-struct GoCallback {
+/* promise resolver */
+struct GoCallback_s {
+    int flags;
     v8_coro g;
     v8_val result;
-    int flags;
 };
 
 struct Go_s {
@@ -244,14 +245,17 @@ coroutine static void start_go(mill_pipe inq) {
 coroutine static void recv_go(v8_state vm) {
     while (true) {
         int done;
-        GoCallback *cb = *((GoCallback **) mill_piperecv(vm->outq, &done));
+        GoCallback_s *cb = *((GoCallback_s **) mill_piperecv(vm->outq, &done));
         if (done) {
             mill_pipefree(vm->outq);
             break;
         }
         /* Send to the channel to be processed later in WaitFor(). */
         int rc = mill_chs(vm->ch, &cb);
-        assert(rc == 0);
+        if (rc != 0) {
+            // exiting; free cb ?
+            break;
+        }
     }
 }
 
@@ -367,7 +371,7 @@ static void Co(const FunctionCallbackInfo<Value>& args) {
     co_sched(g);
 }
 
-static bool FinishGo(v8_state vm, GoCallback *cb) {
+static bool FinishGo(v8_state vm, GoCallback_s *cb) {
     vm->ncoro--;
     Go_s *g = reinterpret_cast<Go_s *>(cb->g);
     for (int i = 0; i < g->argc; i++) {
@@ -396,7 +400,7 @@ static inline void RejectGo(Isolate *isolate, Go_s *g, v8Value val) {
     isolate->RunMicrotasks();
 }
 
-static bool RunGoCallback(v8_state vm, GoCallback *cb) {
+static bool RunGoCallback(v8_state vm, GoCallback_s *cb) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate)
     // GetCurrentContext() is NULL if called from WaitFor().
@@ -480,7 +484,7 @@ static bool RunGoCallback(v8_state vm, GoCallback *cb) {
 static void WaitFor(v8_state vm) {
     while (vm->ncoro > 0) {
         /* fprintf(stderr, [[ WaitFor: %d unfinished coroutines. ]]\n", vm->ncoro);*/
-        GoCallback *cb = chr(vm->ch, GoCallback *);
+        GoCallback_s *cb = chr(vm->ch, GoCallback_s *);
         assert(cb);
         RunGoCallback(vm, cb);
     }
@@ -495,7 +499,7 @@ static void MakeGoTemplate(v8_state vm) {
 }
 
 static int v8_goresolve(v8_state vm, v8_coro cr, v8_val data, int done) {
-    GoCallback *cb = new GoCallback;
+    GoCallback_s *cb = new GoCallback_s;
     cb->g = cr;
     cb->result = data;
     cb->flags = (GoResolve|!!done);
@@ -505,7 +509,7 @@ static int v8_goresolve(v8_state vm, v8_coro cr, v8_val data, int done) {
 }
 
 static int v8_goreject(v8_state vm, v8_coro cr, const char *message) {
-    GoCallback *cb = new GoCallback;
+    GoCallback_s *cb = new GoCallback_s;
     cb->g = cr;
     cb->result = v8_ctypestr(message, strlen(message));
     cb->flags = GoReject;
@@ -563,12 +567,6 @@ static void Now(const FunctionCallbackInfo<Value>& args) {
     ISOLATE_SCOPE(args, isolate)
     int64_t n = now();
     args.GetReturnValue().Set(Number::New(isolate, n));
-}
-
-static void Close(const FunctionCallbackInfo<Value>& args) {
-    ISOLATE_SCOPE(args, isolate)
-    v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
-    mill_pipeclose(vm->inq);
 }
 
 // $eval(string, origin) -- Must compile and run.
@@ -678,9 +676,8 @@ static void utf8String(const FunctionCallbackInfo<Value>& args) {
     void *ptr = nullptr;
     int maxLength = -1;
 
-    if (argc > 0) {
-        v8Object obj = args[0]->ToObject(context).ToLocalChecked();
-
+    if (argc > 0 && args[0]->IsObject()) {
+        v8Object obj = v8Object::Cast(args[0]);
         if (obj->IsArrayBuffer()) {
             ArrayBuffer::Contents c = v8ArrayBuffer::Cast(obj)->GetContents();
             ptr = c.Data();
@@ -836,7 +833,7 @@ v8_state js8_vmnew(mill_worker w) {
     assert(vm->inq);
     vm->outq = mill_pipemake(sizeof (void *));
     assert(vm->outq);
-    vm->ch = mill_chmake(sizeof (GoCallback *), 64); // XXX: How to select a bufsize??
+    vm->ch = mill_chmake(sizeof (void *), 64); // XXX: How to select a bufsize??
     assert(vm->ch);
     vm->ncoro = 0;
     go(start_go(vm->inq));
@@ -866,7 +863,7 @@ static void GlobalSet(v8Name name, v8Value val,
 // Invoked by the main thread.
 void js8_vmclose(v8_state vm) {
     //
-    // vm->inq already closed (See js_vmclose()).
+    // vm->inq already closed.
     // Close vm->outq; This causes the receiving coroutine (recv_coro)
     // to exit the loop and free vm->outq.
     //
@@ -932,7 +929,7 @@ static v8_val CallFunc(struct js8_cmd_s *cmd) {
 
     v8Value v1;
     v8_val ret;
-    if (cmd->type == V8CALLSTR) {
+    if (cmd->type == V8CALLSTR || cmd->type == V8SHUTDOWN) {
         // function expression
         v1 = CompileRun(vm, cmd->h1.stp, &ret);
         if (v1.IsEmpty())
@@ -947,11 +944,14 @@ static v8_val CallFunc(struct js8_cmd_s *cmd) {
     int argc = cmd->nargs;
     assert(argc <= 4);
 
-    TryCatch try_catch(isolate);
     v8Value v = ctype_to_v8(vm, &cmd->h2);
     if (v.IsEmpty())
         panic(isolate, "C api: invalid handle for 'this'", NULL);
-    v8Object self = v->ToObject(context).ToLocalChecked();
+    v8Object self;
+    if (v->IsObject())
+        self = v8Object::Cast(v);
+    else
+        self = context->Global();
 
     v8Value argv[4];
     int i;
@@ -960,9 +960,9 @@ static v8_val CallFunc(struct js8_cmd_s *cmd) {
         if (argv[i].IsEmpty())
             panic(isolate, "C api: invalid handle for argument", NULL);
     }
-
+    TryCatch try_catch(isolate);
     v8Value result = func->Call(
-            context, self, argc, argv).FromMaybe(v8Value());
+        context, self, argc, argv).FromMaybe(v8Value());
     if (try_catch.HasCaught()) {
         return ctype_set_error(isolate, &try_catch);
     }
@@ -988,6 +988,19 @@ int js8_do(struct js8_cmd_s *cmd) {
         cmd->h2 = CallFunc(cmd);
         if (!V8_ISERROR(cmd->h2))
             WaitFor(cmd->vm);
+        break;
+    case V8SHUTDOWN: {
+        v8_state vm = cmd->vm;
+        Isolate *isolate = vm->isolate;
+        LOCK_SCOPE(isolate)
+        // Close the write-end of pipe to prevent launching anymore $go().
+        mill_pipeclose(vm->inq);
+        // TODO: disallow $co.
+        if (cmd->h1.stp) {
+            cmd->h2 = CallFunc(cmd);
+            v8_reset(vm, cmd->h2);
+        }
+    }
         break;
     case V8GC:
 #ifdef V8TEST
@@ -1232,8 +1245,6 @@ static void CreateIsolate(v8_state vm) {
                 FunctionTemplate::New(isolate, Co));
     global->Set(v8STR(isolate, "$now"),
                 FunctionTemplate::New(isolate, Now));
-    global->Set(v8STR(isolate, "$close"),
-                FunctionTemplate::New(isolate, Close));
     global->Set(v8STR(isolate, "$eval"),
                 FunctionTemplate::New(isolate, EvalString));
     global->Set(v8STR(isolate, "$malloc"),
@@ -1255,7 +1266,7 @@ static void CreateIsolate(v8_state vm) {
                 FunctionTemplate::New(isolate, Transfer));
     global->Set(v8STR(isolate, "$utf8String"),
                 FunctionTemplate::New(isolate, utf8String));
-    global->Set(v8STR(isolate, "$toarraybuffer"),
+    global->Set(v8STR(isolate, "$toArrayBuffer"),
                 FunctionTemplate::New(isolate, ToArrayBuffer));
     global->Set(v8STR(isolate, "$pack"),
                 FunctionTemplate::New(isolate, Pack));
@@ -1372,10 +1383,8 @@ static v8_val v8_get(v8_state vm, v8_val hobj, const char *key) {
     v8Value v1 = ctype_to_v8(vm, &hobj);
     if (v1.IsEmpty())
         panic(isolate, "get: invalid handle", NULL);
-    if (!v1->IsObject()) {
-        //v1 = v1->ToObject(context).ToLocalChecked();
+    if (!v1->IsObject())
         panic(isolate, "get: not an object", NULL);
-    }
     v8Object obj = v8Object::Cast(v1);
     v8Value v2 = obj->Get(context,
                 v8STR(isolate, key)).ToLocalChecked();
@@ -1637,6 +1646,7 @@ static struct v8_api_s v8api = {
     v8_goresolve,
     v8_goreject,
     v8_callstr,
+    v8_call,
     &global_,
     &null_,
     /* private */
@@ -1707,6 +1717,5 @@ static void Load(const FunctionCallbackInfo<Value>& args) {
     }
     args.GetReturnValue().Set(o1);
 }
-
 
 } // extern "C"

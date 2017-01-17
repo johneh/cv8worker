@@ -16,6 +16,7 @@ enum js_cmd {
     V8COMPILERUN = 1,
     V8CALL,
     V8CALLSTR,
+    V8SHUTDOWN,
     V8GC,   /* Request garbage collection */
 };
 
