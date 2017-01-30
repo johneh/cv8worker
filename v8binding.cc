@@ -7,6 +7,7 @@
 #include <inttypes.h>
 #include <dlfcn.h>
 #include <math.h>
+#include <signal.h>
 
 #include "v8.h"
 #include "libplatform/libplatform.h"
@@ -151,10 +152,22 @@ static void promise_reject_callback(PromiseRejectMessage message) {
     Local<Promise> promise = message.GetPromise();
     Isolate* isolate = promise->GetIsolate();
     HandleScope handle_scope(isolate);
+
     v8_state vm = reinterpret_cast<v8_state>(isolate->GetData(0));
-    v8Context context = v8Context::New(isolate, vm->context);
-    Context::Scope context_scope(context);
+    // v8Context context = v8Context::New(isolate, vm->context);
+    // Context::Scope context_scope(context);
+
+    v8Context context = isolate->GetCurrentContext();
+
     v8Value exception = message.GetValue();
+
+/*
+    String::Utf8Value s(exception);
+    const char* exception_string = *s ? *s : "unknown error";
+    fprintf(stderr, "%s\n", exception_string);
+    // v8Message msg = v8::Exception::CreateMessage(isolate, exception);
+*/
+
     Local<Integer> event = Integer::New(isolate, message.GetEvent());
 
     v8Function callback = v8Function::Cast(
@@ -162,7 +175,13 @@ static void promise_reject_callback(PromiseRejectMessage message) {
     if (exception.IsEmpty())
         exception = Undefined(isolate);
     v8Value args[] = { event, promise, exception };
+
+    TryCatch try_catch(isolate);
     callback->Call(context->Global(), 3, args);
+    if(try_catch.HasCaught()) { // XXX: ???
+        fprintf(stderr, "bailing out ..\n");
+        exit(1);
+    }
 }
 
   /** v8.h:
@@ -190,9 +209,32 @@ enum {
 
 /* promise resolver */
 struct GoCallback_s {
+    int type;
     int flags;
     v8_coro g;
     v8_val result;
+};
+
+/*
+enum {
+    CbDone = (1 << 0),
+    CbValue = (1 << 1),
+    CbError = (1 << 2),
+};
+*/
+
+/* callback function */
+struct Callback_s {
+    int type;
+    int flags;  /* XXX: not used */
+    v8_val func;
+    v8_val result;
+};
+
+union AsyncCallback_s {
+    int type;
+    struct GoCallback_s go_callback;
+    struct Callback_s callback;
 };
 
 struct Go_s {
@@ -245,7 +287,7 @@ coroutine static void start_go(mill_pipe inq) {
 coroutine static void recv_go(v8_state vm) {
     while (true) {
         int done;
-        GoCallback_s *cb = *((GoCallback_s **) mill_piperecv(vm->outq, &done));
+        AsyncCallback_s *cb = *((AsyncCallback_s **) mill_piperecv(vm->outq, &done));
         if (done) {
             mill_pipefree(vm->outq);
             break;
@@ -253,7 +295,8 @@ coroutine static void recv_go(v8_state vm) {
         /* Send to the channel to be processed later in WaitFor(). */
         int rc = mill_chs(vm->ch, &cb);
         if (rc != 0) {
-            // exiting; free cb ?
+            // exiting?
+            mill_pipefree(vm->outq);
             break;
         }
     }
@@ -282,18 +325,20 @@ static v8_ffn cgodef = { 0, (void *) do_cgo, "__cgo__", FN_CORO };
 
 static Go_s *coro_s(const FunctionCallbackInfo<Value>& args) {
     ISOLATE_SCOPE(args, isolate)
-    Go_s *g;
-    v8_state vm;
+    v8_state vm = reinterpret_cast<v8_state>(isolate->GetData(0));
+
+    if (vm->exiting)
+        panic(isolate, "goroutine is not allowed", NULL);
+
     int argc = args.Length();
     if (argc < 1)
-        panic(isolate, "goroutine argument expected", NULL);
-    vm = reinterpret_cast<v8_state>(isolate->GetData(0));
-    v8_ffn *fndef;
+        panic(isolate, "invalid argument", NULL);
 
+    v8_ffn *fndef;
     v8Object coro = ToGo(args[0]);
     if (coro.IsEmpty()) {
         if (GetObjectId(args[0]) != V8EXTFUNC)
-            panic(isolate, "goroutine argument expected", NULL);
+            panic(isolate, "invalid argument", NULL);
         // use the do_cgo wrapper.
         fndef = reinterpret_cast<v8_ffn *>(
                     v8External::Cast(
@@ -307,16 +352,16 @@ static Go_s *coro_s(const FunctionCallbackInfo<Value>& args) {
 
     if (fndef->type == FN_COROPUSH) {
         if (argc < 2 || !args[argc-1]->IsFunction())
-            panic(isolate, "goroutine callback is not a function", fndef->name);
+            panic(isolate, "callback is not a function", fndef->name);
         argc--;
     }
 
     argc--;
     if (argc != fndef->pcount)
         panic(isolate,
-            "goroutine called with incorrect number of arguments", fndef->name);
+            "called with incorrect number of arguments", fndef->name);
 
-    g = new Go_s;
+    Go_s *g = new Go_s;
     g->vm = vm;
     g->hcb = 0;
     g->argc = argc;
@@ -460,6 +505,7 @@ static bool RunGoCallback(v8_state vm, GoCallback_s *cb) {
 
 
     // log intermediate exceptions with PromiseRejectCallback.
+    // FIXME -- should just bail out!
     if (try_catch.HasCaught() && try_catch.CanContinue()
                 && vm->on_promise_reject) {
         Local<v8::Promise::Resolver> pr =
@@ -481,12 +527,57 @@ static bool RunGoCallback(v8_state vm, GoCallback_s *cb) {
     return false;
 }
 
+static bool RunCallback(v8_state vm, Callback_s *cb) {
+    Isolate *isolate = vm->isolate;
+    LOCK_SCOPE(isolate)
+    v8Context context = v8Context::New(isolate, vm->context);
+    Context::Scope context_scope(context);
+
+    v8Value v1 = ctype_to_v8(vm, &cb->func);
+    if (!v1->IsFunction())
+        panic(isolate, "callback is not a function", NULL);
+    v8Value args[2];
+    args[1] = ctype_to_v8(vm, &cb->result);
+    args[0] = v8::Null(isolate);
+    TryCatch try_catch(isolate);
+    v8Function::Cast(v1)->Call(context->Global(), 2, args);
+    if (try_catch.HasCaught()) {
+        fprintf(stderr, "uncaught error: %s\n",
+                    GetExceptionString(isolate, &try_catch));
+        exit(1);
+    }
+    delete cb;
+    return true;
+}
+
+static AsyncCallback_s *chselect(chan ch) {
+    char clauses[1 * 128];  /* XXX: c++ compilers find MILL_CLAUSELEN define unpalatable */
+    mill_choose_init();
+    mill_choose_in(&clauses[0], ch, 0);
+    mill_choose_otherwise();
+    int si = mill_choose_wait();
+    if(si == -1)   /* otherwise */
+        return NULL;
+    assert(si == 0);
+    return reinterpret_cast<AsyncCallback_s *>(
+            *((void **)mill_choose_val(sizeof(void *))));
+}
+
 static void WaitFor(v8_state vm) {
-    while (vm->ncoro > 0) {
+    AsyncCallback_s *cb;
+    while (!vm->exiting && vm->ncoro > 0) {
         /* fprintf(stderr, [[ WaitFor: %d unfinished coroutines. ]]\n", vm->ncoro);*/
-        GoCallback_s *cb = chr(vm->ch, GoCallback_s *);
-        assert(cb);
-        RunGoCallback(vm, cb);
+        cb = chr(vm->ch, AsyncCallback_s *);
+        if (!cb)
+            break;
+        if (cb->type == 0)
+            RunGoCallback(vm, reinterpret_cast<GoCallback_s *>(cb));
+        else
+            RunCallback(vm, reinterpret_cast<Callback_s *>(cb));
+    }
+    while ((cb = chselect(vm->ch))) {
+        assert(cb->type != 0);
+        RunCallback(vm, reinterpret_cast<Callback_s *>(cb));
     }
 }
 
@@ -500,6 +591,7 @@ static void MakeGoTemplate(v8_state vm) {
 
 static int v8_goresolve(v8_state vm, v8_coro cr, v8_val data, int done) {
     GoCallback_s *cb = new GoCallback_s;
+    cb->type = 0;
     cb->g = cr;
     cb->result = data;
     cb->flags = (GoResolve|!!done);
@@ -510,6 +602,7 @@ static int v8_goresolve(v8_state vm, v8_coro cr, v8_val data, int done) {
 
 static int v8_goreject(v8_state vm, v8_coro cr, const char *message) {
     GoCallback_s *cb = new GoCallback_s;
+    cb->type = 0;
     cb->g = cr;
     cb->result = v8_ctypestr(message, strlen(message));
     cb->flags = GoReject;
@@ -517,6 +610,18 @@ static int v8_goreject(v8_state vm, v8_coro cr, const char *message) {
     assert(rc == 0);
     return (rc == 0);
 }
+
+static int v8_task(v8_state vm, v8_val func, v8_val data) {
+    Callback_s *cb = new Callback_s;
+    cb->type = 1;
+    cb->func = func;
+    cb->result = data;
+    /*cb->flags = 0;*/
+    int rc = mill_pipesend(vm->outq, &cb);
+    assert(rc == 0);
+    return (rc == 0);
+}
+
 
 ///////////////////////////////////End Coroutine////////////////////////////////
 
@@ -864,15 +969,17 @@ static void GlobalSet(v8Name name, v8Value val,
 void js8_vmclose(v8_state vm) {
     //
     // vm->inq already closed.
-    // Close vm->outq; This causes the receiving coroutine (recv_coro)
-    // to exit the loop and free vm->outq.
+    // Close vm->outq and channel; This should cause the receiving coroutine (recv_coro)
+    // to exit the loop.
     //
     Isolate *isolate = vm->isolate;
 
     if (true) {
         Locker locker(isolate);
+        GoCallback_s *cb = nullptr;
 
         mill_pipeclose(vm->outq);
+        mill_chdone(vm->ch, &cb);
         mill_pipefree(vm->inq);
     }
 
@@ -993,13 +1100,15 @@ int js8_do(struct js8_cmd_s *cmd) {
         v8_state vm = cmd->vm;
         Isolate *isolate = vm->isolate;
         LOCK_SCOPE(isolate)
-        // Close the write-end of pipe to prevent launching anymore $go().
+        vm->exiting = true;
+        // Close the write-end of pipe to disallow $go() .
         mill_pipeclose(vm->inq);
-        // TODO: disallow $co.
+        // TODO: disallow $co().
         if (cmd->h1.stp) {
             cmd->h2 = CallFunc(cmd);
             v8_reset(vm, cmd->h2);
         }
+        WaitFor(vm);
     }
         break;
     case V8GC:
@@ -1139,49 +1248,52 @@ static v8Value ctype_to_v8(v8_state vm, v8_val *ctval) {
 
 
 ///////////////////////////////////////////////////////////////
-static void PersistentSet(const v8::FunctionCallbackInfo<v8::Value>& args) {
+static void PersistSet(const v8::FunctionCallbackInfo<v8::Value>& args) {
     int argc = args.Length();
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
-    ThrowNotEnoughArgs(isolate, argc < 1);
-    v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
-    unsigned k = NewPersister(vm, args[0]);
-    args.GetReturnValue().Set(Integer::NewFromUnsigned(isolate, k));
+    if (argc > 0) {
+        v8_state vm = reinterpret_cast<v8_state>(isolate->GetData(0));
+        unsigned k = NewPersister(vm, args[0]);
+        args.GetReturnValue().Set(Integer::NewFromUnsigned(isolate, k));
+    }
 }
 
-static void PersistentGet(const v8::FunctionCallbackInfo<v8::Value>& args) {
+static void PersistGet(const v8::FunctionCallbackInfo<v8::Value>& args) {
     int argc = args.Length();
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
-    ThrowNotEnoughArgs(isolate, argc < 1);
-    unsigned k = args[0]->Uint32Value(isolate->GetCurrentContext()).FromJust();
-    v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
-    v8Value v = GetValueFromPersister(vm, k);
-    if (v.IsEmpty())
-        ThrowError(isolate, "get: invalid handle argument");
-    args.GetReturnValue().Set(v);
+    if (argc > 0) {
+        unsigned k = args[0]->Uint32Value(isolate->GetCurrentContext()).FromJust();
+        v8_state vm = reinterpret_cast<v8_state>(isolate->GetData(0));
+        v8Value v = GetValueFromPersister(vm, k);
+        if (v.IsEmpty())
+            ThrowError(isolate, "invalid handle");
+        args.GetReturnValue().Set(v);
+    }
 }
 
-static void PersistentDelete(const v8::FunctionCallbackInfo<v8::Value>& args) {
+static void PersistDelete(const v8::FunctionCallbackInfo<v8::Value>& args) {
     int argc = args.Length();
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
-    ThrowNotEnoughArgs(isolate, argc < 1);
-    unsigned k = args[0]->Uint32Value(isolate->GetCurrentContext()).FromJust();
-    v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
-    DeletePersister(vm, k);
+    if (argc > 0) {
+        unsigned k = args[0]->Uint32Value(isolate->GetCurrentContext()).FromJust();
+        v8_state vm = reinterpret_cast<v8_state>(isolate->GetData(0));
+        DeletePersister(vm, k);
+    }
 }
 
-// $store.set(), $store.get() and $store.delete()
-static v8Value MakeStore(Isolate *isolate) {
+// $$persist.set(), $$persist.get() and $$persist.delete()
+static v8Value MakePersist(Isolate *isolate) {
     EscapableHandleScope handle_scope(isolate);
     v8ObjectTemplate templ = ObjectTemplate::New(isolate);
     templ->Set(v8STR(isolate, "set"),
-                FunctionTemplate::New(isolate, PersistentSet));
+                FunctionTemplate::New(isolate, PersistSet));
     templ->Set(v8STR(isolate, "get"),
-                FunctionTemplate::New(isolate, PersistentGet));
+                FunctionTemplate::New(isolate, PersistGet));
     templ->Set(v8STR(isolate, "delete"),
-                FunctionTemplate::New(isolate, PersistentDelete));
+                FunctionTemplate::New(isolate, PersistDelete));
     // Create the one and only instance.
     v8Object p = templ->NewInstance(
                 isolate->GetCurrentContext()).ToLocalChecked();
@@ -1231,6 +1343,7 @@ static void CreateIsolate(v8_state vm) {
 
     assert(isolate->GetCurrentContext().IsEmpty());
     vm->isolate = isolate;
+    vm->exiting = 0;
 
     // isolate->SetCaptureStackTraceForUncaughtExceptions(true);
     isolate->SetData(0, vm);
@@ -1335,7 +1448,7 @@ static void CreateIsolate(v8_state vm) {
                         context->Global()->GetPrototype());
     realGlobal->Set(v8STR(isolate, "Global"), realGlobal);
     realGlobal->Set(v8STR(isolate, "$nullptr"), nullptr_obj);
-    realGlobal->Set(v8STR(isolate, "$store"), MakeStore(isolate));
+    realGlobal->Set(v8STR(isolate, "$$persist"), MakePersist(isolate));
 
     realGlobal->SetAccessor(context, v8STR(isolate, "$errno"),
                     GlobalGet, GlobalSet).FromJust();
@@ -1359,6 +1472,11 @@ static void CreateIsolate(v8_state vm) {
 // Runs in the worker(V8) thread.
 int js8_vminit(v8_state vm) {
     CreateIsolate(vm);
+    sigset_t mask;
+    sigfillset(&mask);
+    /* unblock all signals */
+    if (pthread_sigmask(SIG_UNBLOCK, &mask, NULL) == -1)
+        fprintf(stderr, "pthread_sigmask: %s\n", strerror(errno));
     go(recv_go(vm));
     return 0;
 }
@@ -1649,7 +1767,7 @@ static struct v8_api_s v8api = {
     v8_call,
     &global_,
     &null_,
-    /* private */
+    v8_task,
     v8_ctypestr,
     v8_panic,
     v8_ctype_errs,

@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <assert.h>
+#include <signal.h>
 
 #include "libpill.h"
 #include "jsv8.h"
@@ -143,6 +144,12 @@ int main(int argc, char **argv) {
        %s <source>\n", argv[0], argv[0]);
         exit(1);
     }
+
+    /* block all signals; unblocked _only_ in the V8 thread. */
+    sigset_t mask;
+    sigfillset(&mask);
+    if (pthread_sigmask(SIG_SETMASK, &mask, NULL) == -1)
+        fprintf(stderr, "pthread_sigmask: %s\n", strerror(errno));
 
     mill_init(-1, -1);
     mill_worker w = mill_worker_create();

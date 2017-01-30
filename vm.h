@@ -34,6 +34,7 @@ struct js_vm_s {
     PersistentStore *store_;
 
     v8_handle on_promise_reject;
+    int exiting;
 
 #ifdef V8TEST
     int weak_counter;

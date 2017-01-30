@@ -31,6 +31,7 @@ fetch({ host: 'news.google.com', schema: 'https'} )
     try {
         let resp = await fetch(url);
         let msg_headers = await resp.headers();
+        //$print(msg_headers);
         console.log(`transfer-encoding: ${url.host} =`,
                 parse(msg_headers).get('transfer-encoding'));
         var b = await resp.body();
@@ -38,7 +39,7 @@ fetch({ host: 'news.google.com', schema: 'https'} )
     } catch (e) {
         $print(url.host, ':', e);
     }
-})({ host: 'www.aol.com'});  // chunked encoding
+})({ host: 'www.aol.com', schema: 'https' });  // chunked encoding
 
 
 (async function (url) {

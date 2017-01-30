@@ -87,6 +87,7 @@ struct v8_api_s {
     /* private */
     v8_val *global_;
     v8_val *null_;
+    int (*task_)(v8_state vm, v8_val func, v8_val data);
     v8_val (*ctypestr_)(const char *, unsigned);
     void (*panic_)(const char *, const char *);
     const char **errs_;
