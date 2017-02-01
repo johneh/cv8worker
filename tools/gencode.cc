@@ -38,7 +38,44 @@ static llvm::cl::opt<bool>  useLong ("long",
         llvm::cl::desc("use 64 bit integer"));
 static llvm::cl::opt<std::string>  excludeFuncs ("nowrap",
         llvm::cl::desc("do not create wrapper for function (use : to seperate names)"));
+static llvm::cl::opt<std::string>  incHdrs ("include",
+        llvm::cl::desc("include headers in output (use : to seperate headers)"));
+
 std::set<std::string> skipFuncs;
+
+struct CEnumItem {
+    std::string name;
+    int value;
+    CEnumItem(std::string n, int v): name(n), value(v) {}
+};
+
+struct CEnum {
+    std::string enumName;
+    std::string typedefName;
+    std::vector<CEnumItem *>items;
+    CEnum(): enumName(), typedefName(), items() {}
+    ~CEnum() {
+        for(unsigned k = 0; k < items.size(); k++) {
+            delete items[k];
+        }
+    }
+};
+
+struct CRecord {
+    std::string recName;
+    std::string typedefName;
+    unsigned size;
+    bool isanon;
+    std::string offsets;
+    CRecord(): recName(), typedefName(), size(0), isanon(false), offsets() {}
+    CRecord(const CRecord *cr1, const std::string &ts) : recName(cr1->recName),
+            typedefName(ts), size(cr1->size),
+            isanon(cr1->isanon), offsets(cr1->offsets) {}
+};
+
+std::vector<CEnum *> _enums;
+std::vector<CRecord *> _records;
+std::string _fns;
 
 //static llvm::cl::opt<std::string>  beginCode("start",
 //        llvm::cl::desc("code to add before starting output"));
@@ -197,43 +234,11 @@ static JsType ParseType(QualType qType) {
     }
 }
 
-struct CEnumItem {
-    std::string name;
-    int value;
-    CEnumItem(std::string n, int v): name(n), value(v) {}
-};
-
-struct CEnum {
-    std::string enumName;
-    std::string typedefName;
-    std::vector<CEnumItem *>items;
-    CEnum(): enumName(), typedefName(), items() {}
-    ~CEnum() {
-        for(unsigned k = 0; k < items.size(); k++) {
-            delete items[k];
-        }
-    }
-};
-
-struct CRecord {
-    std::string recName;
-    std::string typedefName;
-    unsigned size;
-    bool isanon;
-    std::string offsets;
-    CRecord(): recName(), typedefName(), size(0), isanon(false), offsets() {}
-    CRecord(const CRecord *cr1, const std::string &ts) : recName(cr1->recName),
-            typedefName(ts), size(cr1->size),
-            isanon(cr1->isanon), offsets(cr1->offsets) {}
-};
-
 // RecursiveASTVisitor does a pre-order depth-first traversal of the AST
 class CVisitor : public RecursiveASTVisitor<CVisitor> {
 public:
-    explicit CVisitor(SourceManager &s, std::vector<CEnum *> &e,
-                std::vector<CRecord *> &r,
-                std::string &fns, std::string &file)
-        : m_sm(s), m_enums(e), m_records(r), m_fns(fns), m_file(file) {}
+    explicit CVisitor(SourceManager &s, std::string &file)
+        : m_sm(s), m_file(file) {}
 
     bool VisitDecl(Decl *decl) {
         FullSourceLoc fullLoc(decl->getLocStart(), m_sm);
@@ -296,7 +301,7 @@ public:
                         ASSERT(tD1);
                         CRecord *cr1 = findCRecordByTypedefName(tD1->getNameAsString());
                         ASSERT(cr1);
-                        m_records.push_back(
+                        _records.push_back(
                                 new CRecord(cr1, typedefDecl->getNameAsString())
                         );
                         return true;
@@ -382,8 +387,8 @@ protected:
     CEnum *findCEnumByName(const std::string& name) {
         if (name == "")
             return nullptr;
-        for (unsigned k = 0; k < m_enums.size(); k++) {
-            CEnum *ce = m_enums[k];
+        for (unsigned k = 0; k < _enums.size(); k++) {
+            CEnum *ce = _enums[k];
             if (ce->enumName == name)
                 return ce;
         }
@@ -392,8 +397,8 @@ protected:
 
     CEnum *findCEnumByTypedefName(const std::string& name) {
         ASSERT(name != "");
-        for (unsigned k = 0; k < m_enums.size(); k++) {
-            CEnum *ce = m_enums[k];
+        for (unsigned k = 0; k < _enums.size(); k++) {
+            CEnum *ce = _enums[k];
             if (ce->typedefName == name)
                 return ce;
         }
@@ -420,28 +425,28 @@ protected:
             ce->typedefName = name;
         else
             ce->enumName = name;
-        m_enums.push_back(ce);
+        _enums.push_back(ce);
         return ce;
     }
 
     CRecord *getCRecord(const std::string& name) {
         ASSERT(name != "");
         CRecord *cr;
-        for (unsigned k = 0; k < m_records.size(); k++) {
-            cr = m_records[k];
+        for (unsigned k = 0; k < _records.size(); k++) {
+            cr = _records[k];
             if (cr->recName == name)
                 return cr;
         }
         cr = new CRecord();
         cr->recName = name;
-        m_records.push_back(cr);
+        _records.push_back(cr);
         return cr;
     }
 
     CRecord *findCRecordByTypedefName(const std::string& name) {
         ASSERT(name != "");
-        for (unsigned k = 0; k < m_records.size(); k++) {
-            CRecord *cr = m_records[k];
+        for (unsigned k = 0; k < _records.size(); k++) {
+            CRecord *cr = _records[k];
             if (cr->typedefName == name)
                 return cr;
         }
@@ -465,7 +470,7 @@ protected:
         size_t n = snprintf(buf, 256, "{ %d, do_%s, \"%s\"},\n",
                             numParams, cname, cname);
         ASSERT(n < 256);
-        m_fns.append(buf);
+        _fns.append(buf);
     }
 
     void MakeWrapParam(JsType jsType, int paramNum) {
@@ -660,20 +665,14 @@ private:
 
 private:
     SourceManager &m_sm;
-    std::vector<CEnum *> &m_enums;
-    std::vector<CRecord *> &m_records;  // struct and unions
-    std::string &m_fns;
     std::string m_file;
 };
 
 
 class CConsumer : public ASTConsumer {
 public:
-    explicit CConsumer(CompilerInstance &ci, std::vector<CEnum *> &enums,
-                std::vector<CRecord *> &recs,
-                std::string &fns, std::string file)
-        : m_ci(ci), m_visitor(CVisitor(ci.getSourceManager(),
-                enums, recs, fns, file)) {}
+    explicit CConsumer(CompilerInstance &ci, std::string file)
+        : m_ci(ci), m_visitor(CVisitor(ci.getSourceManager(), file)) {}
 
     // Called by the parser for each top-level declaration.
     virtual bool HandleTopLevelDecl(DeclGroupRef dg) override {
@@ -699,27 +698,40 @@ public:
     CFrontendAction() {}
 
     bool BeginSourceFileAction(CompilerInstance &CI, StringRef Filename) override {
-        StringRef hName = Filename;
-        size_t pos = Filename.rfind('/');
-        if (pos != StringRef::npos)
-            hName = Filename.substr(pos+1);
-
-        fprintf(stdout, "#include \"jsv8dlfn.h\"\n");
-//        if (beginCode != "") {
-//            fprintf(stdout, "%s\n", beginCode.c_str());
-//        }
-        if (hName.endswith(".h"))
-            fprintf(stdout, "#include <%s>\n", hName.data());        
-        fprintf(stdout, "\n");
         return true;
     }
  
     void EndSourceFileAction() override {
-        fprintf(stdout, "\nstatic v8_ffn fntab_[] = {\n%s{0}\n};\n", m_fns.c_str());
+    }
+
+    // The StringRef parameter is the current input filename.
+    std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &ci,
+                                llvm::StringRef file) override {
+        return llvm::make_unique<CConsumer>(ci, file.str());
+    }
+
+    ~CFrontendAction() {
+    }
+};
+
+
+static std::set<std::string> split(const char *str, char c) {
+    std::set<std::string> s;
+    do {
+        const char *begin = str;
+        while (*str && *str != c)
+            str++;
+        s.insert(std::string(begin, str));
+    } while (*str++);
+    return s;
+}
+
+static void EndAction(void) {
+        fprintf(stdout, "static v8_ffn fntab_[] = {\n%s{0}\n};\n", _fns.c_str());
         fprintf(stdout, "static const char source_str_[] = \"(function(){\\\n");
         fprintf(stdout, "var _tags = {}, _types = {}, _s;\\\n");
-        for (unsigned k = 0; k < m_enums.size(); k++) {
-            CEnum *ce = m_enums[k];
+        for (unsigned k = 0; k < _enums.size(); k++) {
+            CEnum *ce = _enums[k];
             if (ce->items.size() == 0)  // not defined
                 continue;
             const std::string& eName = ce->typedefName != "" ? ce->typedefName
@@ -747,8 +759,8 @@ public:
 #endif
         }
 
-        for (unsigned k = 0; k < m_records.size(); k++) {
-            CRecord *r = m_records[k];
+        for (unsigned k = 0; k < _records.size(); k++) {
+            CRecord *r = _records[k];
             if (r->offsets == "")
                 continue;
             if (r->isanon && r->typedefName == "")
@@ -767,41 +779,9 @@ public:
         fprintf(stdout, "v8_val rc = jsv8->callstr(vm, source_str_, hobj, 0, NULL);\n");
         fprintf(stdout, "if (V8_ISERROR(rc)) return -1;\n");
         fprintf(stdout, "JS_EXPORT(fntab_);\n}\n");
-    }
-
-    // The StringRef parameter is the current input filename.
-    std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &ci,
-                                llvm::StringRef file) override {
-        return llvm::make_unique<CConsumer>(
-                        ci,  m_enums, m_records, m_fns, file.str());
-    }
-
-    ~CFrontendAction() {
-        for (unsigned k = 0; k < m_enums.size(); k++) {
-            delete m_enums[k];
-        }
-        for (unsigned k = 0; k < m_records.size(); k++) {
-            delete m_records[k];
-        }
-    }
-
-private:
-    std::vector<CEnum *> m_enums;
-    std::vector<CRecord *> m_records;
-    std::string m_fns;
-};
-
-
-static std::set<std::string> split(const char *str, char c) {
-    std::set<std::string> s;
-    do {
-        const char *begin = str;
-        while (*str && *str != c)
-            str++;
-        s.insert(std::string(begin, str));
-    } while (*str++);
-    return s;
 }
+
+
 
 // N.B.: run with a trailing -- (./gencode filename --) to avoid seeing the
 // garbage spewed by clang.
@@ -811,6 +791,20 @@ int main(int argc, const char **argv) {
     ClangTool tool(op.getCompilations(), op.getSourcePathList());
     if (excludeFuncs != "")
         skipFuncs = split(excludeFuncs.c_str(), ':');
-    return tool.run(newFrontendActionFactory<CFrontendAction>().get());
+    if (incHdrs != "") {
+        std::set<std::string> headers;
+        headers = split(incHdrs.c_str(), ':');
+        set<std::string>::iterator it;
+        for (it = headers.begin(); it != headers.end(); it++) {
+            fprintf(stdout, "#include <%s>\n", (*it).c_str());
+        }
+    }
+
+    fprintf(stdout, "#include \"jsv8dlfn.h\"\n\n");
+    int ret = tool.run(newFrontendActionFactory<CFrontendAction>().get());
+    if (ret == 0) {
+        EndAction();
+    }
+    return ret;
 }
 
