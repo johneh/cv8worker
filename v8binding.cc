@@ -154,34 +154,51 @@ static void promise_reject_callback(PromiseRejectMessage message) {
     HandleScope handle_scope(isolate);
 
     v8_state vm = reinterpret_cast<v8_state>(isolate->GetData(0));
+
     // v8Context context = v8Context::New(isolate, vm->context);
     // Context::Scope context_scope(context);
-
     v8Context context = isolate->GetCurrentContext();
-
-    v8Value exception = message.GetValue();
-
-/*
-    String::Utf8Value s(exception);
-    const char* exception_string = *s ? *s : "unknown error";
-    fprintf(stderr, "%s\n", exception_string);
-    // v8Message msg = v8::Exception::CreateMessage(isolate, exception);
-*/
-
-    Local<Integer> event = Integer::New(isolate, message.GetEvent());
 
     v8Function callback = v8Function::Cast(
             GetValueFromPersister(vm, vm->on_promise_reject));
-    if (exception.IsEmpty())
-        exception = Undefined(isolate);
-    v8Value args[] = { event, promise, exception };
 
-    TryCatch try_catch(isolate);
-    callback->Call(context->Global(), 3, args);
-    if(try_catch.HasCaught()) { // XXX: ???
-        fprintf(stderr, "bailing out ..\n");
-        exit(1);
+    v8Value exception = message.GetValue();
+
+    v8Value args[3];
+    args[0] = Integer::New(isolate, message.GetEvent());
+    args[1] = promise;
+
+    // XXX: Accessing the stack property of exception sometimes
+    // causes a segfault. As a workaround, passing only the error
+    // message.
+    // args[2] = exception;
+
+    if (exception.IsEmpty()) {
+        args[2] = Undefined(isolate);
+    } else {
+        std::string s;
+        String::Utf8Value es(exception);
+        const char *err_str = *es ? *es : "unknown error";
+
+        v8Message msg = v8::Exception::CreateMessage(isolate, exception);
+        if (!msg.IsEmpty()) {
+            // Print (filename):(line number)
+            String::Utf8Value filename(msg->GetScriptOrigin().ResourceName());
+            const char* filename_string = *filename ? *filename : "?";
+            int linenum = msg->GetLineNumber(context).FromJust();
+            char linenum_string[32];
+            sprintf(linenum_string, "%i:", linenum);
+            s.append(filename_string);
+            s.append(":");
+            s.append(linenum_string);
+            s.append(err_str);
+        } else
+            s.append(err_str);
+
+        args[2] = String::NewFromUtf8(vm->isolate, s.c_str());
     }
+
+    callback->Call(context->Global(), 3, args);
 }
 
   /** v8.h:

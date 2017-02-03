@@ -44,14 +44,14 @@
 
             this.console = { log: $print };
 
-            this.$$onPromiseReject(function(event, promise, err) {
+            this.$$onPromiseReject(function(event, promise, errstr) {
                 // event -- v8.h
                 //  kPromiseRejectWithNoHandler = 0,
                 //  kPromiseHandlerAddedAfterReject = 1
                 if (event === 0)
-                    console.log('Unhandled rejection:', promise, err.stack);
+                    console.log('Unhandled rejection:', promise, errstr);
                 else
-                    console.log('Post-rejection handler:', promise, err.stack);
+                    console.log('Post-rejection handler:', promise);
             });
 
             // function expression
