@@ -22,8 +22,15 @@ gdk-pixbuf-loader.c:
 `pkg-config --cflags gdk-pixbuf-2.0` -I$(CLANG_DIR)/include > $@
 
 gdk-cairo.c:
-	$(GENCODE) /usr/include/gtk-2.0/gdk/gdkcairo.h -- \
+	$(GENCODE) --strip gdk_cairo_ -include gdk/gdkcairo.h \
+/usr/include/gtk-2.0/gdk/gdkcairo.h -- \
 `pkg-config --cflags gdk-2.0` -I$(CLANG_DIR)/include > $@
+
+gdk-cairo.o: $(TOPDIR)/jsv8.h $(TOPDIR)/jsv8dlfn.h gdk-cairo.c
+	$(CC) `pkg-config --cflags gdk-2.0` $(SO_CFLAGS) gdk-cairo.c
+
+libgdk-cairo.so: gdk-cairo.o
+	$(CC) $(SO_LDFLAGS) $^ -o $@ `pkg-config --libs gdk-2.0`
 
 gobject.c:
 	$(GENCODE) --strip g_object_ ./gobject-min.h -- \

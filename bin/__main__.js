@@ -27,7 +27,7 @@
                 return new DLL(libname, loader.CWD).identifiers;
             };
 
-            this.setTimeout = function (callback, delay) {
+            this.setTimeout = function (callback, delay, ...args) {
                 if (typeof callback !== 'function') {
                     throw new TypeError("setTimeout: 'callback' is not a function");
                 }
@@ -36,7 +36,7 @@
                     delay = 0;
                 $co(loader.msleep, delay)
                 .then(() => {
-                    callback();
+                    callback(...args);
                 });
             };
 
