@@ -7,32 +7,22 @@ CLANG_DIR := /usr/include/clang/3.8
 #INCLUDES = -I. -I$(TOPDIR) -I$(MILL_INCLUDES) $(V8_INCLUDES)
 #LIBS = $(V8_LIBS) $(MILL_LIBS_STATIC) -lm -lstdc++
 
-all: libxlibjs.so
-
+all: libxlib.so
 
 SO_CFLAGS = -fPIC -Wall -c -g -I. -I$(TOPDIR)
 SO_LDFLAGS = -shared
 
-#CAIRO_DIR := /usr/include/cairo
-#cairojs.c: $(TOPDIR)/tools/gencode.cc
-#	cd $(TOPDIR)/tools; make; cd $(TOPDIR)/tests; \
-#	$(TOPDIR)/tools/gencode --strip cairo_ $(CAIRO_DIR)/cairo.h -- > $@
+xlib.c:
+	$(GENCODE) -long -nowrap XEHeadOfExtensionList:XQueryKeymap \
+-include X11/Xlib.h:X11/Xutil.h \
+/usr/include/X11/Xlib.h xlibextra.h -- \
+-I$(CLANG_DIR)/include > $@
 
-xlibjs.o: $(TOPDIR)/jsv8.h $(TOPDIR)/jsv8dlfn.h xlibjs.c
-	$(CC) $(SO_CFLAGS) xlibjs.c
+xlib.o: $(TOPDIR)/jsv8.h $(TOPDIR)/jsv8dlfn.h xlib.c
+	$(CC) $(SO_CFLAGS) xlib.c
 
-libxlibjs.so: xlibjs.o
+libxlib.so: xlib.o
 	$(CC) $(SO_LDFLAGS) $^ -o $@ -lX11
-
-xftjs.c:
-	$(GENCODE) -long /usr/include/X11/Xft/Xft.h -- \
--I/usr/include/X11 `pkg-config --cflags xft` -I$(CLANG_DIR)/include > $@
-
-xftjs.o: $(TOPDIR)/jsv8.h $(TOPDIR)/jsv8dlfn.h xftjs.c
-	$(CC) $(SO_CFLAGS) `pkg-config --cflags xft` xftjs.c
-
-libxftjs.so: xftjs.o
-	$(CC) $(SO_LDFLAGS) $^ -o $@ -lX11 -lXft
 
 clean:
 	rm -f *.o
