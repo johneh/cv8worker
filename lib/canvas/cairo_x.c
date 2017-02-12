@@ -25,6 +25,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include <cairo/cairo.h>
 #include <stdlib.h>
+#include <stdint.h>
 
 void blur(cairo_surface_t *surface, int radius) {
     // Steve Hanov, 2009
@@ -87,6 +88,93 @@ void blur(cairo_surface_t *surface, int radius) {
 
     cairo_surface_mark_dirty(surface);
     free(precalc);
+}
+
+void get_image_surface_data(cairo_surface_t *surface,
+		int sx, int sy, int sw, int sh, uint8_t *dst)
+{
+  uint8_t *src = cairo_image_surface_get_data(surface);
+  int srcStride = cairo_image_surface_get_stride(surface);
+  int dstStride = 4 * sw;
+  int x, y;
+
+  // Normalize data (argb -> rgba)
+  for (y = 0; y < sh; ++y) {
+    uint32_t *row = (uint32_t *)(src + srcStride * (y + sy));
+    for (x = 0; x < sw; ++x) {
+      int bx = x * 4;
+      uint32_t *pixel = row + x + sx;
+      uint8_t a = *pixel >> 24;
+      uint8_t r = *pixel >> 16;
+      uint8_t g = *pixel >> 8;
+      uint8_t b = *pixel;
+      dst[bx + 3] = a;
+
+      // Performance optimization: fully transparent/opaque pixels can be
+      // processed more efficiently.
+      if (a == 0 || a == 255) {
+        dst[bx + 0] = r;
+        dst[bx + 1] = g;
+        dst[bx + 2] = b;
+      } else {
+        float alpha = (float)a / 255;
+        dst[bx + 0] = (int)((float)r / alpha);
+        dst[bx + 1] = (int)((float)g / alpha);
+        dst[bx + 2] = (int)((float)b / alpha);
+      }
+
+    }
+    dst += dstStride;
+  }
+}
+
+void put_image_surface_data(cairo_surface_t *surface,
+        uint8_t *src, int width, int height,
+		int sx, int sy,
+		int dx, int dy, int rows, int cols)
+{
+  uint8_t *dst = cairo_image_surface_get_data(surface);
+  int srcStride = 4 * width;
+  int dstStride = cairo_image_surface_get_stride(surface);
+  int x, y;
+
+  src += sy * srcStride + sx * 4;
+  dst += dstStride * dy + 4 * dx;
+  for (y = 0; y < rows; ++y) {
+    uint8_t *dstRow = dst;
+    uint8_t *srcRow = src;
+    for (x = 0; x < cols; ++x) {
+      // rgba
+      uint8_t r = *srcRow++;
+      uint8_t g = *srcRow++;
+      uint8_t b = *srcRow++;
+      uint8_t a = *srcRow++;
+
+      // argb
+      // performance optimization: fully transparent/opaque pixels can be
+      // processed more efficiently.
+      if (a == 0) {
+        *dstRow++ = 0;
+        *dstRow++ = 0;
+        *dstRow++ = 0;
+        *dstRow++ = 0;
+      } else if (a == 255) {
+        *dstRow++ = b;
+        *dstRow++ = g;
+        *dstRow++ = r;
+        *dstRow++ = a;
+      } else {
+        float alpha = (float)a / 255;
+        *dstRow++ = b * alpha;
+        *dstRow++ = g * alpha;
+        *dstRow++ = r * alpha;
+        *dstRow++ = a;
+      }
+    }
+    dst += dstStride;
+    src += srcStride;
+  }
+  cairo_surface_mark_dirty_rectangle(surface, dx, dy, cols, rows);
 }
 
 

@@ -14,14 +14,17 @@ SO_LDFLAGS = -shared
 
 xlib.c:
 	$(GENCODE) -long -nowrap XEHeadOfExtensionList:XQueryKeymap \
--include X11/Xlib.h:X11/Xutil.h \
-/usr/include/X11/Xlib.h xlibextra.h -- \
+-include X11/Xlib.h:X11/Xutil.h:xlib_x.h \
+/usr/include/X11/Xlib.h xlibextra.h xlib_x.h -- \
 -I$(CLANG_DIR)/include > $@
 
 xlib.o: $(TOPDIR)/jsv8.h $(TOPDIR)/jsv8dlfn.h xlib.c
 	$(CC) $(SO_CFLAGS) xlib.c
 
-libxlib.so: xlib.o
+xlib_x.o: xlib_x.c
+	$(CC) $(SO_CFLAGS) xlib_x.c
+
+libxlib.so: xlib.o xlib_x.o
 	$(CC) $(SO_LDFLAGS) $^ -o $@ -lX11
 
 clean:

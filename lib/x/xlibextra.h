@@ -47,3 +47,4 @@ Bool XEqualRegion(Region r1, Region r2);
 Bool XPointInRegion(Region r, int x, int y);
 int XRectInRegion(Region r, int x, int y, unsigned int width, unsigned
               int height);
+
