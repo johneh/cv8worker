@@ -570,6 +570,8 @@ void Pack(const FunctionCallbackInfo<Value>& args) {
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
     ThrowNotEnoughArgs(isolate, argc < 2);
+    if (!args[0]->IsObject())
+        ThrowTypeError(isolate, "invalid argument");
     v8Object obj = args[0]->ToObject(
                 isolate->GetCurrentContext()).ToLocalChecked();
     struct pack_s ps = {0};
@@ -611,6 +613,8 @@ void Unpack(const FunctionCallbackInfo<Value>& args) {
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
     ThrowNotEnoughArgs(isolate, argc < 2);
+    if (!args[0]->IsObject())
+        ThrowTypeError(isolate, "invalid argument");
     v8Object obj = args[0]->ToObject(
                 isolate->GetCurrentContext()).ToLocalChecked();
     struct pack_s ps = {0};

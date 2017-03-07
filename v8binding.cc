@@ -722,24 +722,6 @@ static void EvalString(const FunctionCallbackInfo<Value>& args) {
     args.GetReturnValue().Set(result);
 }
 
-// malloc(size [, zerofill] )
-// TODO: adjust GC allocation amount.
-static void Malloc(const v8::FunctionCallbackInfo<v8::Value>& args) {
-    ISOLATE_SCOPE(args, isolate)
-    int argc = args.Length();
-    ThrowNotEnoughArgs(isolate, argc < 1);
-    v8Context context = isolate->GetCurrentContext();
-    int size = args[0]->Int32Value(context).FromJust();
-    if (size <= 0)
-        ThrowError(isolate, "$malloc: invalid size argument");
-    void *ptr = emalloc(size);
-    if (argc > 1 && args[1]->BooleanValue(context).FromJust())
-        memset(ptr, '\0', size);
-    v8Object ptrObj = WrapPtr(
-            reinterpret_cast<js_vm*>(isolate->GetData(0)), ptr);
-    args.GetReturnValue().Set(ptrObj);
-}
-
 // $isPointer(v [, isNotNull = false])
 static void IsPointer(const FunctionCallbackInfo<Value>& args) {
     ISOLATE_SCOPE(args, isolate)
@@ -875,6 +857,8 @@ static void CallForeignFunc(
     for (int i = 0; i < argc; i++) {
         v8_reset(vm, ctvals[i]);
     }
+    if (V8_ISERROR(retval))
+        ThrowError(isolate, retval.stp);
     v8Value retv = ctype_to_v8(vm, &retval);
     if (retv.IsEmpty()) // invalid persistent handle
         panic(isolate, "received invalid return value", func_wrap->name);
@@ -1377,8 +1361,6 @@ static void CreateIsolate(v8_state vm) {
                 FunctionTemplate::New(isolate, Now));
     global->Set(v8STR(isolate, "$eval"),
                 FunctionTemplate::New(isolate, EvalString));
-    global->Set(v8STR(isolate, "$malloc"),
-                FunctionTemplate::New(isolate, Malloc));
     global->Set(v8STR(isolate, "$isPointer"),
                 FunctionTemplate::New(isolate, IsPointer));
     global->Set(v8STR(isolate, "$strerror"),

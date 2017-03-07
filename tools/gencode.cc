@@ -212,7 +212,21 @@ static JsType ParseType(QualType qType) {
         } else if (pointeeType->getTypeClass() == Type::Pointer) {
             // pointee itself is a pointer
             ;
+        } else if (pointeeType->getTypeClass() == Type::Typedef) {
+            // typedef char gchar
+            // func(gchar *text, ..)
+
+            const TypedefType *tyType = pointeeType->getAs<clang::TypedefType>();
+            QualType uQType = tyType->getDecl()->getUnderlyingType();
+            if (uQType->getTypeClass() == Type::Builtin) {
+                const BuiltinType *bltIn = uQType->getAs<clang::BuiltinType>();
+                if (bltIn->getKind() == BuiltinType::SChar
+                        || bltIn->getKind() == BuiltinType::Char_S) {
+                    return JsType::String;
+                }
+            }
         }
+
         return JsType::Ptr;
     }
     case Type::Typedef: {

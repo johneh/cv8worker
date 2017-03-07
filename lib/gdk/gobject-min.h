@@ -33,4 +33,3 @@ gboolean g_object_is_floating (gpointer object);
 /*
 Checks whether object has a floating reference.
 */
-

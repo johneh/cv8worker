@@ -160,6 +160,8 @@ struct v8_api_s {
 /* string copied */
 #define V8_STR(s_, l_)    jsv8->ctypestr_(s_, l_)
 
+#define V8_ERR(s_)    (v8_val) { .stp = s_, .type = V8_CTYPE_ERR }
+
 #define V8_HANDLE(h_) (v8_val) { .hndle = h_, .type = V8_CTYPE_HANDLE }
 
 #define V8_GLOBAL   (*jsv8->global_)
