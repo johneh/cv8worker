@@ -18,12 +18,22 @@ const sqlite3 = require('../lib/sqlite3.js');
 select customerNumber, customerName from customers where customerNumber > ?
                 and  customerNumber < ?`
         );
+
         await sth.bind(400, 425);
         count = await sth.each((row) => {
             console.log(row[0], row[1]);
         });
 
         console.log(`========== each: ${count} rows fetched. ==========`);
+
+        await sth.bind(400, 425);
+        let r = await sth.all();
+        for (let i = 0; i < r.length; i++) {
+            console.log(r[i][0], r[i][1]);
+        }
+
+        console.log(`========== all: ${r.length} rows fetched. ==========`);
+
         await sth.finalize();
 
     } catch (err) {

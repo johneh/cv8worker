@@ -47,9 +47,9 @@ libcairojs.so: cairojs.o
 	$(CC) $(SO_LDFLAGS) $^ -o $@ -lcairo
 
 
-pointjs.c: $(TOPDIR)/tools/gencode.cc
-	cd $(TOPDIR)/tools; make; cd $(TOPDIR)/tests; \
-	$(TOPDIR)/tools/gencode point.h -- > $@
+#pointjs.c: $(TOPDIR)/tools/gencode.cc
+#	cd $(TOPDIR)/tools; make; cd $(TOPDIR)/tests; \
+#	$(TOPDIR)/tools/gencode point.h -- > $@
 
 pointjs.o: $(TOPDIR)/jsv8.h $(TOPDIR)/jsv8dlfn.h pointjs.c
 	$(CC) $(SO_CFLAGS) -I$(MILL_INCLUDES) pointjs.c

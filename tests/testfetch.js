@@ -68,7 +68,7 @@ fetch({ host: 'news.google.com', schema: 'https'} )
 fetch({ host:'www.google.com'})
 .then((resp) => {
     let bytesReceived = 0;
-    function perror(err) {
+    let perror = (err) => {
             console.log(err.stack);
     };
 

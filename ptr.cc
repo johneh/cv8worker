@@ -44,7 +44,7 @@ void SetCtypeWeak(v8Object obj) {
     obj->SetAlignedPointerInInternalField(0,
                 reinterpret_cast<void*>(static_cast<uintptr_t>(id)));
 }
-
+/*
 static void Free(const FunctionCallbackInfo<Value>& args) {
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
@@ -57,6 +57,7 @@ static void Free(const FunctionCallbackInfo<Value>& args) {
         obj->SetInternalField(1, External::New(isolate, nullptr));
     }
 }
+*/
 
 // ptr.notNull() -- ensure pointer is not NULL.
 static void NotNull(const FunctionCallbackInfo<Value>& args) {
@@ -606,8 +607,8 @@ void Pack(const FunctionCallbackInfo<Value>& args) {
     args.GetReturnValue().Set(Number::New(isolate, sz));
 }
 
-// ptr.unpack(object, offset, format)
-// Returns null if the format is undefined or empty string.
+// $unpack(object, offset, format) -> [item1, ... itemN, bytes_consumed]
+// Returns null if the format is invalid or empty string.
 void Unpack(const FunctionCallbackInfo<Value>& args) {
     int argc = args.Length();
     Isolate *isolate = args.GetIsolate();
@@ -645,8 +646,9 @@ void Unpack(const FunctionCallbackInfo<Value>& args) {
             args.GetReturnValue().Set(arr);
             return;
         }
+    } else {
+        args.GetReturnValue().Set(v8::Null(isolate));
     }
-    args.GetReturnValue().Set(v8::Null(isolate));
 }
 
 v8Object WrapPtr(v8_state vm, void *ptr) {
@@ -671,6 +673,54 @@ void *UnwrapPtr(v8Object ptrObj) {
     return v8External::Cast(ptrObj->GetInternalField(1))->Value();
 }
 
+// ptr.offsetAt(offset).
+// Usage:
+// struct foo { int x; struct bar; };
+// p1 = (struct foo *) ..;
+// p2 = p1.offsetAt(4); // -> (struct bar *).
+// p2.offsetAt(-4).equal(p1); // -> true
+// XXX: may need to keep a reference to p1
+// (e.g. as a property in p2 object) in JS.
+
+static void OffsetAt(const FunctionCallbackInfo<Value>& args) {
+    int argc = args.Length();
+    Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
+    ThrowNotEnoughArgs(isolate, argc < 1);
+
+    v8Object obj = args.Holder();
+    if (GetObjectId(obj) != V8EXTPTR)
+        ThrowTypeError(isolate, "not a pointer");
+    void *ptr = v8External::Cast(obj->GetInternalField(1))->Value();
+    if (!ptr)
+        ThrowError(isolate, "pointer is null");
+    int off = args[0]->Int32Value(
+                            isolate->GetCurrentContext()).FromJust();
+    args.GetReturnValue().Set(
+                WrapPtr((v8_state ) isolate->GetData(0), (char *) ptr + off));
+}
+
+static void Equal(const FunctionCallbackInfo<Value>& args) {
+    int argc = args.Length();
+    Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
+    ThrowNotEnoughArgs(isolate, argc < 1);
+
+    v8Object obj1 = args.Holder();
+    if (GetObjectId(obj1) != V8EXTPTR)
+        ThrowTypeError(isolate, "not a pointer");
+    void *ptr1 = v8External::Cast(obj1->GetInternalField(1))->Value();
+
+    if (GetObjectId(args[0]) != V8EXTPTR)
+        ThrowTypeError(isolate, "invalid argument");
+    v8Object obj2 = args[0]->ToObject(
+                isolate->GetCurrentContext()).ToLocalChecked();
+    void *ptr2 = v8External::Cast(obj2->GetInternalField(1))->Value();
+
+    args.GetReturnValue().Set(Boolean::New(isolate, (ptr1 == ptr2)));
+}
+
+
 // Construct the prototype object for C pointers and functions.
 void MakeCtypeProto(v8_state vm) {
     Isolate *isolate = vm->isolate;
@@ -681,10 +731,14 @@ void MakeCtypeProto(v8_state vm) {
     v8ObjectTemplate ptr_templ = ObjectTemplate::New(isolate);
     ptr_templ->Set(v8STR(isolate, "gc"),
                 FunctionTemplate::New(isolate, Gc));
-    ptr_templ->Set(v8STR(isolate, "free"),
-                FunctionTemplate::New(isolate, Free));
+    /* ptr_templ->Set(v8STR(isolate, "free"),
+                FunctionTemplate::New(isolate, Free)); */
     ptr_templ->Set(v8STR(isolate, "notNull"),
                 FunctionTemplate::New(isolate, NotNull));
+    ptr_templ->Set(v8STR(isolate, "offsetAt"),
+                FunctionTemplate::New(isolate, OffsetAt));
+    ptr_templ->Set(v8STR(isolate, "equal"),
+                FunctionTemplate::New(isolate, Equal));
     ptr_templ->Set(v8STR(isolate, "packSize"),
                 FunctionTemplate::New(isolate, PackSize));
 

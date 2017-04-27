@@ -4,21 +4,21 @@ include $(TOPDIR)/config.mk
 GENCODE := $(TOPDIR)/tools/gencode
 CLANG_DIR := /usr/include/clang/3.8
 
-#INCLUDES = -I. -I$(TOPDIR) -I$(MILL_INCLUDES) $(V8_INCLUDES)
-#LIBS = $(V8_LIBS) $(MILL_LIBS_STATIC) -lm -lstdc++
 
 all: libgobject.so libgdk-pixbuf.so libgdk-pixbuf-loader.so \
-libpixbuf-await.so
+libpixbuf-await.so libgdk-cairo.so
 
 SO_CFLAGS = -fPIC -Wall -c -g -I. -I$(TOPDIR)
 SO_LDFLAGS = -shared
 
 gdk-pixbuf.c:
-	$(GENCODE) --strip gdk_pixbuf_ /usr/include/gdk-pixbuf-2.0/gdk-pixbuf/gdk-pixbuf-core.h -- \
+	$(GENCODE) --strip gdk_pixbuf_ -include gdk-pixbuf/gdk-pixbuf.h \
+/usr/include/gdk-pixbuf-2.0/gdk-pixbuf/gdk-pixbuf-core.h -- \
 `pkg-config --cflags gdk-pixbuf-2.0` -I$(CLANG_DIR)/include > $@
 
 gdk-pixbuf-loader.c:
-	$(GENCODE) --strip gdk_pixbuf_loader_ /usr/include/gdk-pixbuf-2.0/gdk-pixbuf/gdk-pixbuf-loader.h -- \
+	$(GENCODE) --strip gdk_pixbuf_loader_ -include gdk-pixbuf/gdk-pixbuf-loader.h \
+/usr/include/gdk-pixbuf-2.0/gdk-pixbuf/gdk-pixbuf-loader.h -- \
 `pkg-config --cflags gdk-pixbuf-2.0` -I$(CLANG_DIR)/include > $@
 
 gdk-cairo.c:
@@ -33,7 +33,8 @@ libgdk-cairo.so: gdk-cairo.o
 	$(CC) $(SO_LDFLAGS) $^ -o $@ `pkg-config --libs gdk-2.0`
 
 gobject.c:
-	$(GENCODE) --strip g_object_ ./gobject-min.h -- \
+	$(GENCODE) --strip g_object_ -include gobject-min.h \
+./gobject-min.h -- \
 `pkg-config --cflags gdk-2.0` -I$(CLANG_DIR)/include > $@
 
 gobject.o: $(TOPDIR)/jsv8.h $(TOPDIR)/jsv8dlfn.h gobject.c
@@ -63,3 +64,4 @@ libpixbuf-await.so: pixbuf-await.o
 clean:
 	rm -f *.o
 	rm -f *.so
+	rm -f gdk-*.c

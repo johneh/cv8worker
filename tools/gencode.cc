@@ -43,6 +43,21 @@ static llvm::cl::opt<std::string>  incHdrs ("include",
 
 std::set<std::string> skipFuncs;
 
+//static llvm::cl::opt<std::string>  beginCode("start",
+//        llvm::cl::desc("code to add before starting output"));
+
+#define ASSERT(x) \
+    do {\
+        if (!(x)) {\
+            fprintf(stderr, "Assert failed: " #x " (%s:%d)\n",\
+                __FILE__, __LINE__);\
+            fflush(stderr);\
+            abort();\
+        }\
+    } while (0)
+
+std::string _fns;
+
 struct CEnumItem {
     std::string name;
     int value;
@@ -73,25 +88,9 @@ struct CRecord {
             isanon(cr1->isanon), offsets(cr1->offsets) {}
 };
 
-std::vector<CEnum *> _enums;
-std::vector<CRecord *> _records;
-std::string _fns;
-
-//static llvm::cl::opt<std::string>  beginCode("start",
-//        llvm::cl::desc("code to add before starting output"));
-
-#define ASSERT(x) \
-    do {\
-        if (!(x)) {\
-            fprintf(stderr, "Assert failed: " #x " (%s:%d)\n",\
-                __FILE__, __LINE__);\
-            fflush(stderr);\
-            abort();\
-        }\
-    } while (0)
-
-
+// XXX: keep in sync with EndAction() output
 enum class JsType {
+    None,
     Void,
     Int,
     Uint,
@@ -100,8 +99,189 @@ enum class JsType {
     Double,
     String,     // char *
     VoidPtr,    // void *
-    Ptr         // int *, struct foo *, void **, char ** etc.
+    RecordPtr,  // struct(union) *
+    TypeDefPtr, // typedef (of struct or union) *
+    Ptr         // int *, double *, void **, char ** etc.
 };
+
+struct CParam {
+    JsType type;
+    std::string paramName;
+    std::string recName;
+    CParam(): type(JsType::None), paramName(), recName() {}
+};
+
+class CFunc {
+public:
+    CFunc(const std::string &fName, int n): funcName(fName), nparams(n+1),
+            params(n+1, CParam()) {}
+    const char *getName(void) {
+        return funcName.c_str();
+    }
+    int numParams(void) {
+        return nparams;
+    }
+    CParam *getParam(int i) {
+        ASSERT((i < nparams) && "Param index out of bounds");
+        return &params[i];
+    }
+    CParam *getReturn(void) {
+        return getParam(0);
+    }
+
+    void makeWrap(void) {
+        const char *fname = funcName.c_str();
+        const char *cname = fname;
+        if (stripPrefix != "") {
+            if (funcName.find(stripPrefix) == 0)
+                cname = fname + stripPrefix.size();
+        }
+
+        fprintf(stdout,
+"static v8_val do_%s(v8_state vm, int argc, v8_val argv[]) {\n",
+            cname);
+
+        // the struct entry for the table of functions
+        char buf[256];
+        size_t n = snprintf(buf, 256, "{ %d, do_%s, \"%s\"},\n",
+                            nparams-1, cname, cname);
+        ASSERT(n < 256);
+        _fns.append(buf);
+
+        for (int i = 1; i < nparams; i++) {
+            wrapParam(i);
+        }
+        wrapEnd();
+    }
+
+    const char *cName(void) {
+        const char *fname = funcName.c_str();
+        const char *cname = fname;
+        if (stripPrefix != "") {
+            if (funcName.find(stripPrefix) == 0)
+                cname = fname + stripPrefix.size();
+        }
+        return cname;
+    }
+
+    void Print(void) {
+        fprintf(stdout, "{name: '%s', params: [\\\n", cName());
+        for (int i = 0; i < nparams; i++) {
+            CParam *p = &params[i];
+            if (p->type == JsType::TypeDefPtr || p->type == JsType::RecordPtr) {
+                fprintf(stdout, "{ type: %d, vname: '%s', tagname: '%s'},\\\n",
+                    p->type, p->paramName.c_str(), p->recName.c_str());
+            } else {
+                fprintf(stdout, "{ type: %d, vname: '%s'},\\\n",
+                    p->type, p->paramName.c_str());
+            }
+        }
+        fprintf(stdout, "]},\\\n");
+    }
+
+    ~CFunc() {}
+
+private:
+
+    void wrapParam(int paramNum) {
+        CParam *param = &params[paramNum];
+        int argc = paramNum-1;  // 0-based
+        switch (param->type) {
+        case JsType::Int:
+            fprintf(stdout, "int p%d = V8_TOINT32(argv[%d]);\n", paramNum, argc);
+            break;
+        case JsType::Uint:
+            fprintf(stdout, "unsigned int p%d = V8_TOUINT32(argv[%d]);\n",
+                paramNum, argc);
+            break;
+        case JsType::Long:
+            fprintf(stdout, "int64_t p%d = V8_TOLONG(argv[%d]);\n", paramNum, argc);
+            break;
+        case JsType::Ulong:
+            fprintf(stdout, "uint64_t p%d = V8_TOULONG(argv[%d]);\n",
+                paramNum, argc);
+            break;
+        case JsType::Double:
+            fprintf(stdout, "double p%d = V8_TODOUBLE(argv[%d]);\n",
+                paramNum, argc);
+            break;
+        case JsType::String:
+            fprintf(stdout, "char *p%d = V8_TOSTR(argv[%d]);\n", paramNum, argc);
+            break;
+        case JsType::RecordPtr:
+        case JsType::TypeDefPtr:
+        case JsType::VoidPtr:
+        case JsType::Ptr:
+            fprintf(stdout, "void *p%d = V8_TOPTR(argv[%d]);\n", paramNum, argc);
+            break;
+        default:
+            ASSERT(0 && "MakeWrapParam(): received unexpected type");
+        }
+    }
+
+    void wrapEnd(void) {
+        std::string ends;
+        const char *fname = funcName.c_str();
+        CParam *retp = getReturn();
+        //fprintf(stdout, "if (v8dl->errstr(vm)) return;\n");
+        switch (retp->type) {
+        case JsType::Void:
+            fprintf(stdout, "%s(", fname);
+            ends = "return V8_VOID;\n";
+            break;
+        case JsType::Int:
+            fprintf(stdout, "int r = (int) %s(", fname);
+            ends = "return V8_INT32(r);\n";
+            break;
+        case JsType::Uint:
+            fprintf(stdout, "unsigned int r = (unsigned int) %s(", fname);
+            ends = "return V8_UINT32(r);\n";
+            break;
+        case JsType::Long:
+            fprintf(stdout, "int64_t r = (int64_t) %s(", fname);
+            ends = "return V8_LONG(r);\n";
+            break;
+        case JsType::Ulong:
+            fprintf(stdout, "uint64_t r = (uint64_t) %s(", fname);
+            ends = "return V8_ULONG(r);\n";
+            break;
+        case JsType::Double:
+            fprintf(stdout, "double r = (double) %s(", fname);
+            ends = "return V8_DOUBLE(r);\n";
+            break;
+        /*
+        case JsType::String:
+            fprintf(stdout, "char *r = (char *) %s(", fname);
+            ends = "return V8_STR(r, strlen(r));\n";
+            break; */
+        case JsType::String:
+        case JsType::RecordPtr:
+        case JsType::TypeDefPtr:
+        case JsType::VoidPtr:
+        case JsType::Ptr:
+            fprintf(stdout, "void *r = (void *) %s(", fname);
+            ends = "return V8_PTR(r);\n";
+            break;
+        default:
+            ASSERT(0 && "MakeWrapEnd(): received unexpected type");
+        }
+        for (int i = 1; i < nparams; i++) {
+            if (i > 1) fprintf(stdout, ",");
+            fprintf(stdout, "p%d", i);
+        }
+        fprintf(stdout, ");\n%s}\n", ends.c_str());
+    }
+
+protected:
+    std::string funcName;
+    int nparams;    // including the return
+    std::vector<CParam>params; // return value at index 0
+};
+
+
+std::vector<CEnum *> _enums;
+std::vector<CRecord *> _records;
+std::vector<CFunc *> _funcs;
 
 static JsType ParseBuiltinType(const BuiltinType* bltIn) {
     switch(bltIn->getKind()) {
@@ -178,7 +358,7 @@ static char BuiltinCode(const BuiltinType* bltIn) {
     return (char) 0;
 }
 
-static JsType ParseType(QualType qType) {
+static JsType ParseType(QualType qType, CParam *param) {
 
     ASSERT(!qType.isNull() && "Expected non-null QualType");
     const Type* cType = qType.getTypePtr();
@@ -186,13 +366,13 @@ static JsType ParseType(QualType qType) {
     switch(qType->getTypeClass()) {
     case Type::Builtin: {
         const BuiltinType *bltIn = cType->getAs<clang::BuiltinType>();
-        return ParseBuiltinType(bltIn);
+        return (param->type = ParseBuiltinType(bltIn));
     }
     case Type::Enum: {
         // const EnumType *enumType = cType->getAs<clang::EnumType>();
         // EnumDecl* enumDecl = enumType->getDecl();
         // cout << "Type::Enum ..."<< enumDecl->getIntegerType().getAsString()<<"\n";
-        return JsType::Int;
+        return (param->type = JsType::Int);
     }
     case Type::Pointer: {
         const PointerType *ptrType = cType->getAs<clang::PointerType>();
@@ -204,10 +384,10 @@ static JsType ParseType(QualType qType) {
             if (bltIn->getKind() == BuiltinType::SChar
                 || bltIn->getKind() == BuiltinType::Char_S
             ) {
-                return JsType::String;
+                return (param->type = JsType::String);
             }
             else if (bltIn->getKind() == BuiltinType::Void) {
-                return JsType::VoidPtr;
+                return (param->type = JsType::VoidPtr);
             }
         } else if (pointeeType->getTypeClass() == Type::Pointer) {
             // pointee itself is a pointer
@@ -222,21 +402,30 @@ static JsType ParseType(QualType qType) {
                 const BuiltinType *bltIn = uQType->getAs<clang::BuiltinType>();
                 if (bltIn->getKind() == BuiltinType::SChar
                         || bltIn->getKind() == BuiltinType::Char_S) {
-                    return JsType::String;
+                    return (param->type = JsType::String);
                 }
             }
+            if (uQType->isRecordType()) {
+                // cerr<<"[[[typedef "<<tyType->getDecl()->getNameAsString()<<
+                //    ": struct "<<uQType->getAsTagDecl()->getNameAsString()<<"]]]\n";
+                param->recName = tyType->getDecl()->getNameAsString();
+                return (param->type = JsType::TypeDefPtr);
+            }
+        } else if (pointeeType->isRecordType()) {
+            param->recName = pointeeType->getAsTagDecl()->getNameAsString();
+            // cerr<<"[[[ struct "<<param->recName<<"]]]\n";
+            return (param->type = JsType::RecordPtr);
         }
-
-        return JsType::Ptr;
+        return (param->type = JsType::Ptr);
     }
     case Type::Typedef: {
         const TypedefType *tyType = cType->getAs<clang::TypedefType>();
         QualType uQType = tyType->getDecl()->getUnderlyingType();
-        return ParseType(uQType);
+        return ParseType(uQType, param);
     }
     case Type::Elaborated: {
         const ElaboratedType *elaboratedType = cType->getAs<clang::ElaboratedType>();
-        return ParseType(elaboratedType->getNamedType());
+        return ParseType(elaboratedType->getNamedType(), param);
     }
     case Type::Record:
         cerr<<"error: struct or union as argument or return value.\n";
@@ -247,6 +436,7 @@ static JsType ParseType(QualType qType) {
         exit(1);
     }
 }
+
 
 // RecursiveASTVisitor does a pre-order depth-first traversal of the AST
 class CVisitor : public RecursiveASTVisitor<CVisitor> {
@@ -362,14 +552,16 @@ public:
                     return true;
                 }
 
-                MakeWrapStart(fName, funcDecl->getNumParams());
-                for (unsigned i = 0, j = funcDecl->getNumParams(); i != j; ++i) {
+                unsigned numParams = funcDecl->getNumParams();
+                CFunc *cFn = new CFunc(fName, numParams);
+                _funcs.push_back(cFn);
+                for (unsigned i = 0, j = numParams; i != j; ++i) {
                     const ParmVarDecl *paramDecl = funcDecl->getParamDecl(i);
-                    // parameter name paramDecl->getName(), maybe empty ( == "")
-                    MakeWrapParam(ParseType(paramDecl->getOriginalType()), i);
+                    CParam *param = cFn->getParam(i+1);
+                    param->paramName = paramDecl->getName();  // maybe empty == ""
+                    ParseType(paramDecl->getOriginalType(), param);
                 }
-                MakeWrapEnd(ParseType(funcDecl->getReturnType()),
-                            fName, funcDecl->getNumParams());
+                ParseType(funcDecl->getReturnType(), cFn->getParam(0));
             }
         } else if (decl->getKind() == Decl::Record) {
             RecordDecl *recDecl = dyn_cast<RecordDecl>(decl);
@@ -467,6 +659,7 @@ protected:
         return nullptr;
     }
 
+#if 0
     void MakeWrapStart(const std::string& fName, unsigned int numParams) {
         const char *fname = fName.c_str();
         const char *cname = fname;
@@ -510,6 +703,8 @@ protected:
         case JsType::String:
             fprintf(stdout, "char *p%d = V8_TOSTR(argv[%d]);\n", paramNum, paramNum);
             break;
+        case JsType::RecordPtr:
+        case JsType::TypeDefPtr:
         case JsType::VoidPtr:
         case JsType::Ptr:
             fprintf(stdout, "void *p%d = V8_TOPTR(argv[%d]);\n", paramNum, paramNum);
@@ -555,6 +750,8 @@ protected:
             ends = "return V8_STR(r, strlen(r));\n";
             break; */
         case JsType::String:
+        case JsType::RecordPtr:
+        case JsType::TypeDefPtr:
         case JsType::VoidPtr:
         case JsType::Ptr:
             fprintf(stdout, "void *r = (void *) %s(", fname);
@@ -569,6 +766,7 @@ protected:
         }
         fprintf(stdout, ");\n%s}\n", ends.c_str());
     }
+#endif
 
 private:
 
@@ -646,7 +844,7 @@ private:
                 if (cT->getTypeClass() == Type::Builtin) {
                     tpOff = ((int) BuiltinCode(cT->getAs<clang::BuiltinType>())) << 16 | tpOff;
                 } else if (cT->getTypeClass() == Type::Enum) {
-                    tpOff = ((int) 'i') | tpOff;
+                    tpOff = (((int) 'i') << 16) | tpOff;
                 }
             }
 
@@ -741,6 +939,10 @@ static std::set<std::string> split(const char *str, char c) {
 }
 
 static void EndAction(void) {
+        for (unsigned k = 0; k < _funcs.size(); k++) {
+            _funcs[k]->makeWrap();
+        }
+
         fprintf(stdout, "static v8_ffn fntab_[] = {\n%s{0}\n};\n", _fns.c_str());
         fprintf(stdout, "static const char source_str_[] = \"(function(){\\\n");
         fprintf(stdout, "var _tags = {}, _types = {}, _s;\\\n");
@@ -786,6 +988,24 @@ static void EndAction(void) {
             if (r->typedefName != "")
                 fprintf(stdout, "_types['%s'] = _s;\\\n", r->typedefName.c_str());
         }
+
+        fprintf(stdout, "this['#funcs'] = [\\\n");
+        for (unsigned k = 0; k < _funcs.size(); k++) {
+            _funcs[k]->Print();
+        }
+        fprintf(stdout, "];\\\n");
+
+        fprintf(stdout, "this.VOID = 1;\\\n\
+this.INT = 2;\\\n\
+this.UINT = 3;\\\n\
+this.LONG = 4;\\\n\
+this.ULONG = 5;\\\n\
+this.DOUBLE = 6;\\\n\
+this.STRING = 7;\\\n\
+this.VOIDPTR = 8;\\\n\
+this.RECORDPTR = 9;\\\n\
+this.TYPEDEFPTR = 10;\\\n\
+this.PTR = 11;\\\n");
 
         fprintf(stdout, "this['#tags'] = _tags;this['#types'] = _types;});\";\n\n");
 

@@ -51,12 +51,6 @@ v8_val ff_isfile(v8_state vm, int argc, v8_val argv[]) {
     return V8_INT32(ret);
 }
 
-coroutine void set_timeout(v8_state vm, v8_coro cr, int argc, v8_val args[]) {
-    uint32_t delay = V8_TOUINT32(args[0]);
-    mill_sleep(now()+delay);
-    jsv8->goresolve(vm, cr, V8_VOID, 1);
-}
-
 // POLLIN only. FIXME
 coroutine void do_fdevent(v8_state vm, v8_coro cr, int argc, v8_val args[]) {
     int fd = V8_TOINT32(args[0]);
@@ -67,12 +61,65 @@ coroutine void do_fdevent(v8_state vm, v8_coro cr, int argc, v8_val args[]) {
         jsv8->goresolve(vm, cr, V8_VOID, 1);
 }
 
+v8_val timer_create(v8_state vm, int argc, v8_val argv[]) {
+    chan ch = chmake(int, 1);
+    return V8_PTR(ch);
+}
+
+v8_val timer_cancel(v8_state vm, int argc, v8_val argv[]) {
+    chan ch = V8_TOPTR(argv[0]);
+    int cancel = 1;
+    mill_chs(ch, &cancel);
+    return V8_VOID;
+}
+
+v8_val timer_close(v8_state vm, int argc, v8_val argv[]) {
+    chan ch = V8_TOPTR(argv[0]);
+    mill_chclose(ch);
+    return V8_VOID;
+}
+
+coroutine void timer_start(v8_state vm, v8_coro cr, int argc, v8_val args[]) {
+    chan ch = V8_TOPTR(args[0]);
+    uint32_t delay = V8_TOUINT32(args[1]);
+    char clauses[1 * 128];  // XXX: c++ compilers find MILL_CLAUSELEN define unpalatable
+
+    mill_chdup(ch);
+    mill_choose_init();
+    mill_choose_in(&clauses[0], ch, 0);
+    mill_choose_deadline(now()+delay);
+    int si = mill_choose_wait();
+    // si == -1 if deadline has expired, 0 otherwise i.e. cancelled.
+    mill_chclose(ch);
+    jsv8->goresolve(vm, cr, V8_INT32(si==-1), 1);
+}
+
+coroutine void timer_interval(v8_state vm, v8_coro cr, int argc, v8_val args[]) {
+    chan ch = V8_TOPTR(args[0]);
+    uint32_t delay = V8_TOUINT32(args[1]);
+    char clauses[1 * 128];
+    int si = -1;
+    mill_chdup(ch);
+    while (si == -1) {
+        mill_choose_init();
+        mill_choose_in(&clauses[0], ch, 0);
+        mill_choose_deadline(now()+delay);
+        si = mill_choose_wait();
+        jsv8->goresolve(vm, cr, V8_INT32(si==-1), si != -1);
+    }
+    mill_chclose(ch);
+}
+
 static v8_ffn ff_table[] = {
     { 1, ff_readfile, "readFile", FN_CTYPE },
     { 1, ff_realpath, "realPath", FN_CTYPE },
     { 1, ff_isfile, "isRegularFile", FN_CTYPE },
-    { 1, set_timeout, "msleep", FN_CORO },
     { 1, do_fdevent, "fdevent", FN_CORO },
+    { 0, timer_create, "timer_create", FN_CTYPE },
+    { 1, timer_cancel, "timer_cancel", FN_CTYPE },
+    { 1, timer_close, "timer_close", FN_CTYPE },
+    { 2, timer_start, "timer_start", FN_CORO },
+    { 2, timer_interval, "timer_interval", FN_COROPUSH },
 };
 
 /* Return an object with the exported C functions */
@@ -89,9 +136,9 @@ v8_val exports(v8_state vm) {
 }
 
 v8_val parse_args(v8_state vm, int argc, char **argv, char **path) {
-    v8_val hargs = jsv8->array(vm, argc);
+    v8_val hargs = jsv8->array(vm, 0);
     v8_val hs;
-    int i;
+    int i, k = 0;
     *path = NULL;
     for (i = 1; i < argc; i++) {
         if (!argv[i])
@@ -101,8 +148,9 @@ v8_val parse_args(v8_state vm, int argc, char **argv, char **path) {
             continue;
         }
         hs = V8_STR(argv[i], strlen(argv[i]));
-        jsv8->seti(vm, hargs, i-1, hs);
+        jsv8->seti(vm, hargs, k, hs);
         jsv8->reset(vm, hs);
+        k++;
     }
     return hargs;
 }
@@ -208,10 +256,48 @@ int main(int argc, char **argv) {
     return 0;
 }
 
+static char *read_stdin(size_t *len) {
+    int fd = fileno(stdin);
+    size_t size = 0;
+    char *buf = NULL;
+    size_t total = 0;
+
+    while (1) {
+        if (size == total) {
+            size += 4096;
+            buf = realloc(buf, size);
+            if (!buf) {
+                errno = ENOMEM;
+                return NULL;
+            }
+        }
+        ssize_t nr = read(fd, buf + total, size - total);
+        if (nr < 0) {
+            free(buf);
+            return NULL;
+        } else if (nr == 0)
+            break;
+        total += nr;
+    }
+    /*
+    if (total == size) {
+        buf = realloc(buf, size + 1);
+    }
+    buf[total] = '\0';
+    */
+
+    *len = total;
+    return buf;
+}
+
+
 static char *readfile(const char *filename, size_t *len) {
     if (!filename || !*filename) {
         errno = EINVAL;
         return NULL;
+    }
+    if (filename[0] == '-' && filename[1] == '\0') {
+        return read_stdin(len);
     }
     int fd = open(filename, 0, 0666);
     if (fd < 0)

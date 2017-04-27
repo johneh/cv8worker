@@ -84,6 +84,10 @@ do_sqlite3_bind(v8_state vm, v8_coro cr, int argc, v8_val args[]) {
     char *bp = V8_TOPTR(args[2]);
     int i, ret = SQLITE_OK;
     char *sp;
+
+    sqlite3_reset(stmt);    // XXX: needed if reusing prepared statements
+    sqlite3_clear_bindings(stmt);
+
     for (i = 1, sp = bp; i <= nitems; i++, fmt++) {
         switch (*fmt) {
         case 'i':
@@ -236,6 +240,11 @@ do_sqlite3_each(v8_state vm, v8_coro cr, int argc, v8_val args[]) {
     unsigned int n = max_rows, count = 0;
     if (batch_rows == 0)
         batch_rows = max_rows;
+
+    // KLUDGE: reset statement if no parameters i.e. bind() not required 
+    if (0 == sqlite3_bind_parameter_count(stmt))
+        sqlite3_reset(stmt);
+
     while (n > 0 && (ret = sqlite3_step(stmt)) == SQLITE_ROW) {
         int i, ncols = sqlite3_column_count(stmt);
         struct fb_buffer fb = {0};

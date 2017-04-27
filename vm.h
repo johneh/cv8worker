@@ -20,6 +20,8 @@ struct js_vm_s {
     chan ch;
     int ncoro;
 
+    void *tasks;
+
     v8::Persistent<v8::Context> context;
     v8::Persistent<v8::ObjectTemplate> extptr_template;
     v8::Persistent<v8::ObjectTemplate> extfunc_template;

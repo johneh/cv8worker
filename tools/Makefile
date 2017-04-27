@@ -36,9 +36,12 @@ CLANG_LIBS := \
 
 #	-lclangIndex \
 
-all: gencode
+all: gencode cparse
 
 gencode : gencode.cc
+	$(CXX) $(CXXFLAGS) $^ $(CLANG_LIBS) $(LLVM_LDFLAGS) $(LLVM_LIBS) -o $@
+
+cparse : cparse.cc
 	$(CXX) $(CXXFLAGS) $^ $(CLANG_LIBS) $(LLVM_LDFLAGS) $(LLVM_LIBS) -o $@
 
 clean :

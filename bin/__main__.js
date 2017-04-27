@@ -22,22 +22,69 @@
             }
             loader._defaultPath = modulePath;
 
+            this.readFile = function(filename) {
+                if (typeof filename !== 'string')
+                    throw new TypeError('not a string');
+                let buf = loader.readFile(filename);  // XXX: string!
+                if (buf === null)
+                    throw new Error($strerror());
+                return buf;
+            };
+
+            // TODO: nuke DLL and loadlib; Always use require().
             this.DLL = dlloader();
             this.$loadlib = function (libname) {
                 return new DLL(libname, loader.CWD).identifiers;
             };
 
-            this.setTimeout = function (callback, delay, ...args) {
+            function Timer() {
+            }
+            Timer.prototype = Object.create(Object.getPrototypeOf($nullptr));
+            const createTimer = function(callback, delay) {
                 if (typeof callback !== 'function') {
                     throw new TypeError("setTimeout: 'callback' is not a function");
                 }
                 delay |= 0;
                 if (delay < 0)
                     delay = 0;
-                $co(loader.msleep, delay)
-                .then(() => {
-                    callback(...args);
+                let t = loader.timer_create();
+                Object.setPrototypeOf(t, Timer.prototype);
+                t.gc(loader.timer_close);
+                t._active = true;
+                return t;
+            };
+            this.setTimeout = function (callback, delay, ...args) {
+                const t = createTimer(callback, delay);
+                $co(loader.timer_start, t, delay)
+                .then((x) => {
+                    if (x) {
+                        // expired and not cancelled
+                        callback(...args);
+                        t._active = false;
+                    }
+                    /*
+                    else {
+                        console.log('timer previously canceled');
+                    }*/
                 });
+                return t;
+            };
+
+            this.setInterval = function (callback, delay, ...args) {
+                const t = createTimer(callback, delay);
+                $co(loader.timer_interval, t, delay, (x, done) => {
+                    if (!done) {
+                        callback(...args);
+                    }
+                });
+                return t;
+            };
+
+            this.clearTimeout = this.clearInterval = function(t) {
+                if (t instanceof Timer && t._active) {
+                    t._active = false;
+                    loader.timer_cancel(t);
+                }
             };
 
             this.$fdevent = loader.fdevent;
@@ -77,16 +124,22 @@ function (a) {
 
         if (argc == 0) {
             throw new Error('usage: jsi -f filename');
-        } else if ((i = argv.indexOf('-e')) >= 0 && argc > i) {
+        } else if ((i = argv.indexOf('-e')) >= 0 && argc > i+1) {
             /* execute string argv[i+1] */
             throw new Error('Not ready yet');
-        } else if ((i = argv.indexOf('-f')) >= 0 && argc > i) {
+        } else if ((i = argv.indexOf('-f')) >= 0 && argc > i+1) {
             path = argv[i+1];
         } else {
-            path = argv[0];
+            throw new Error('usage: jsi -f filename');
         }
 
-        filename = findFile(path, loader, modulePath);
+        if (path === '-' && isFirst) {
+            // read stdin
+            filename = path;
+        } else {
+            filename = findFile(path, loader, modulePath);
+        }
+
         if (!filename)
             throw new Error(path + ': No such file');
         //  $print("filename = ", filename);
@@ -94,6 +147,14 @@ function (a) {
         const cache = loader._moduleCache;
         if (({}).hasOwnProperty.call(cache, filename)) {
             return cache[filename].exports;
+        }
+
+        if (filename.lastIndexOf('.so') > 0) {
+            let dll = new DLL(filename, loader.CWD);
+            cache[filename] = { exports: dll };
+            if (argv.indexOf('-dll') >= 0)
+                return dll;
+            return dll.identifiers;
         }
 
         const module = {};
@@ -121,8 +182,8 @@ function (a) {
         const moduleWrap = $eval(moduleSource, path);
         const lastDir = loader.CWD;
         loader.CWD = dirname;
-        const require = function (path) {
-            return load.call(module, loader, [ "-f", path ]);
+        const require = function (path, ...args) {
+            return load.call(module, loader, [ "-f", path, ...args ]);
         };
 
         moduleWrap.call(exports,

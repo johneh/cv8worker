@@ -226,32 +226,18 @@ enum {
 
 /* promise resolver */
 struct GoCallback_s {
-    int type;
-    int flags;
     v8_coro g;
     v8_val result;
+    int flags;
 };
 
-/*
-enum {
-    CbDone = (1 << 0),
-    CbValue = (1 << 1),
-    CbError = (1 << 2),
-};
-*/
+static GoCallback_s have_tasklets_;
 
-/* callback function */
+/* Tasklet (registered in V8 thread) with "bottom-half" scheduling. */
 struct Callback_s {
-    int type;
-    int flags;  /* XXX: not used */
     v8_val func;
     v8_val result;
-};
-
-union AsyncCallback_s {
-    int type;
-    struct GoCallback_s go_callback;
-    struct Callback_s callback;
+    void *next;
 };
 
 struct Go_s {
@@ -265,6 +251,8 @@ struct Go_s {
     int argc;
     v8_val args[MAXARGS];
 };
+
+static void run_tasklets(v8_state vm);
 
 static v8Object WrapGo(v8_state vm, v8_ffn *fndef) {
     Isolate *isolate = vm->isolate;
@@ -304,7 +292,7 @@ coroutine static void start_go(mill_pipe inq) {
 coroutine static void recv_go(v8_state vm) {
     while (true) {
         int done;
-        AsyncCallback_s *cb = *((AsyncCallback_s **) mill_piperecv(vm->outq, &done));
+        GoCallback_s *cb = *((GoCallback_s **) mill_piperecv(vm->outq, &done));
         if (done) {
             mill_pipefree(vm->outq);
             break;
@@ -567,6 +555,7 @@ static bool RunCallback(v8_state vm, Callback_s *cb) {
     return true;
 }
 
+#if 0
 static AsyncCallback_s *chselect(chan ch) {
     char clauses[1 * 128];  /* XXX: c++ compilers find MILL_CLAUSELEN define unpalatable */
     mill_choose_init();
@@ -579,23 +568,30 @@ static AsyncCallback_s *chselect(chan ch) {
     return reinterpret_cast<AsyncCallback_s *>(
             *((void **)mill_choose_val(sizeof(void *))));
 }
+#endif
+
+static void run_tasklets(v8_state vm) {
+    while (vm->tasks) {
+        Callback_s *t = reinterpret_cast<Callback_s *>(vm->tasks);
+        vm->tasks = t->next;
+        RunCallback(vm, t);
+    }
+}
 
 static void WaitFor(v8_state vm) {
-    AsyncCallback_s *cb;
+    GoCallback_s *cb;
     while (!vm->exiting && vm->ncoro > 0) {
         /* fprintf(stderr, [[ WaitFor: %d unfinished coroutines. ]]\n", vm->ncoro);*/
-        cb = chr(vm->ch, AsyncCallback_s *);
+        cb = chr(vm->ch, GoCallback_s *);
         if (!cb)
             break;
-        if (cb->type == 0)
+        if (cb == &have_tasklets_) {
+            run_tasklets(vm);
+        } else {
             RunGoCallback(vm, reinterpret_cast<GoCallback_s *>(cb));
-        else
-            RunCallback(vm, reinterpret_cast<Callback_s *>(cb));
+        }
     }
-    while ((cb = chselect(vm->ch))) {
-        assert(cb->type != 0);
-        RunCallback(vm, reinterpret_cast<Callback_s *>(cb));
-    }
+    run_tasklets(vm);
 }
 
 static void MakeGoTemplate(v8_state vm) {
@@ -608,7 +604,6 @@ static void MakeGoTemplate(v8_state vm) {
 
 static int v8_goresolve(v8_state vm, v8_coro cr, v8_val data, int done) {
     GoCallback_s *cb = new GoCallback_s;
-    cb->type = 0;
     cb->g = cr;
     cb->result = data;
     cb->flags = (GoResolve|!!done);
@@ -619,7 +614,6 @@ static int v8_goresolve(v8_state vm, v8_coro cr, v8_val data, int done) {
 
 static int v8_goreject(v8_state vm, v8_coro cr, const char *message) {
     GoCallback_s *cb = new GoCallback_s;
-    cb->type = 0;
     cb->g = cr;
     cb->result = v8_ctypestr(message, strlen(message));
     cb->flags = GoReject;
@@ -628,15 +622,19 @@ static int v8_goreject(v8_state vm, v8_coro cr, const char *message) {
     return (rc == 0);
 }
 
+// Use only in V8 thread.
 static int v8_task(v8_state vm, v8_val func, v8_val data) {
     Callback_s *cb = new Callback_s;
-    cb->type = 1;
     cb->func = func;
     cb->result = data;
-    /*cb->flags = 0;*/
-    int rc = mill_pipesend(vm->outq, &cb);
-    assert(rc == 0);
-    return (rc == 0);
+    cb->next = vm->tasks;
+    vm->tasks = cb;
+    if (!cb->next) {
+        // let recv_go() yield for the main coroutine to run the tasklets.
+        GoCallback_s *p = &have_tasklets_;
+        mill_pipesend(vm->outq, &p);
+    }
+    return 1;
 }
 
 
@@ -797,7 +795,7 @@ static void utf8String(const FunctionCallbackInfo<Value>& args) {
     if (maxLength < 0) {    // pointer
         if (argc == 1)
             ThrowError(isolate, "utf8String: LENGTH argument expected");
-        byteLength = args[0]->Int32Value(context).FromJust();
+        byteLength = args[1]->Int32Value(context).FromJust();
         if (byteLength < 0)
             byteLength = -1;    // assume nul-terminated
     } else if (argc > 1) {
@@ -864,6 +862,9 @@ static void CallForeignFunc(
         panic(isolate, "received invalid return value", func_wrap->name);
     args.GetReturnValue().Set(retv);
     v8_reset(vm, retval);
+    if (vm->tasks) {
+        run_tasklets(vm);
+    } 
 }
 
 // ArrayBuffer.transfer()?
@@ -942,6 +943,7 @@ v8_state js8_vmnew(mill_worker w) {
     vm->ch = mill_chmake(sizeof (void *), 64); // XXX: How to select a bufsize??
     assert(vm->ch);
     vm->ncoro = 0;
+    vm->tasks = NULL;
     go(start_go(vm->inq));
     return vm;
 }
