@@ -52,9 +52,9 @@ char *GetExceptionString(Isolate* isolate, TryCatch* try_catch) {
     String::Utf8Value filename(message->GetScriptOrigin().ResourceName());
     v8Context context(isolate->GetCurrentContext());
     const char* filename_string = *filename ? *filename : "?";
+
     int linenum = message->GetLineNumber(context).FromJust();
     char linenum_string[32];
-
     sprintf(linenum_string, "%i:", linenum);
 
     s.append(filename_string);
@@ -62,15 +62,17 @@ char *GetExceptionString(Isolate* isolate, TryCatch* try_catch) {
     s.append(linenum_string);
     s.append(exception_string);
     s.append("\n");
+#if 0
+    XXX: STackTrace() segfaults once in a while ???
     Local<Value> stack_trace_string;
-    if (try_catch->StackTrace(isolate->GetCurrentContext())
-            .ToLocal(&stack_trace_string) &&
-            stack_trace_string->IsString()) {
+    if (try_catch->StackTrace(context).ToLocal(&stack_trace_string)
+            && stack_trace_string->IsString()) {
         String::Utf8Value stack_trace(Local<String>::Cast(stack_trace_string));
         if (*stack_trace)
             s.append(*stack_trace);
         s.append("\n");
     }
+#endif
   }
   return estrdup(s.c_str(), s.length());
 }
@@ -100,8 +102,6 @@ static v8Value ctype_to_v8(v8_state vm, v8_val *ctval);
 static v8_val ctype_handle(v8_handle h);
 static void v8_reset(v8_state vm, v8_val val);
 static v8_val v8_ctypestr(const char *stp, unsigned stlen);
-
-static int SetFinalizer(v8_state vm, v8Object ptrObj, Fnfree free_func);
 
 static inline void DeletePersister(v8_state vm, v8_handle h) {
     if (h > NUM_PERMANENT_HANDLES)
@@ -555,21 +555,6 @@ static bool RunCallback(v8_state vm, Callback_s *cb) {
     return true;
 }
 
-#if 0
-static AsyncCallback_s *chselect(chan ch) {
-    char clauses[1 * 128];  /* XXX: c++ compilers find MILL_CLAUSELEN define unpalatable */
-    mill_choose_init();
-    mill_choose_in(&clauses[0], ch, 0);
-    mill_choose_otherwise();
-    int si = mill_choose_wait();
-    if(si == -1)   /* otherwise */
-        return NULL;
-    assert(si == 0);
-    return reinterpret_cast<AsyncCallback_s *>(
-            *((void **)mill_choose_val(sizeof(void *))));
-}
-#endif
-
 static void run_tasklets(v8_state vm) {
     while (vm->tasks) {
         Callback_s *t = reinterpret_cast<Callback_s *>(vm->tasks);
@@ -833,10 +818,13 @@ static void CallForeignFunc(
     v8_ffn *func_wrap = reinterpret_cast<v8_ffn *>(
                 v8External::Cast(obj->GetInternalField(1))->Value());
     int argc = args.Length();
-    if (argc != func_wrap->pcount)
-        panic(isolate,
+    if (argc != func_wrap->pcount) {
+        /* panic(isolate,
             "C-type function called with incorrect number of arguments",
-            func_wrap->name);
+            func_wrap->name); */
+        ThrowError(isolate,
+            "C-type function called with incorrect number of arguments");
+    }
 
     assert(func_wrap->type == FN_CTYPE);
 
@@ -993,6 +981,7 @@ void js8_vmclose(v8_state vm) {
 static v8_val ctype_set_error(Isolate *isolate, TryCatch *try_catch) {
     v8_val errval;
     errval.type = V8_CTYPE_ERR;
+    errval.hndle = 0;
     errval.stp = GetExceptionString(isolate, try_catch);
     return errval;
 }
@@ -1073,6 +1062,7 @@ static v8_val CallFunc(struct js8_cmd_s *cmd) {
     TryCatch try_catch(isolate);
     v8Value result = func->Call(
         context, self, argc, argv).FromMaybe(v8Value());
+
     if (try_catch.HasCaught()) {
         return ctype_set_error(isolate, &try_catch);
     }
@@ -1091,13 +1081,15 @@ int js8_do(struct js8_cmd_s *cmd) {
         }
         v8_to_ctype(cmd->vm, retv, &cmd->h2);
     } // release locker
-        WaitFor(cmd->vm);
+        if (cmd->istask)
+            WaitFor(cmd->vm);
         break;
     case V8CALL:
     case V8CALLSTR:
         cmd->h2 = CallFunc(cmd);
-        if (!V8_ISERROR(cmd->h2))
+        if (!V8_ISERROR(cmd->h2) && cmd->istask) {
             WaitFor(cmd->vm);
+        }
         break;
     case V8SHUTDOWN: {
         v8_state vm = cmd->vm;
@@ -1111,6 +1103,7 @@ int js8_do(struct js8_cmd_s *cmd) {
             cmd->h2 = CallFunc(cmd);
             v8_reset(vm, cmd->h2);
         }
+        assert(cmd->istask);
         WaitFor(vm);
     }
         break;
@@ -1177,7 +1170,6 @@ static void v8_to_ctype(v8_state vm, v8Value v, v8_val *ctval) {
         p[len] = '\0';
         ctval->stp = p;
     } else if (GetObjectId(v) == V8EXTPTR) {
-        // XXX: optimize: check nullptr?
         ctval->type = V8_CTYPE_PTR;
         ctval->hndle = NewPersister(vm, v);
         ctval->ptr = v8External::Cast(
@@ -1225,6 +1217,8 @@ static v8Value ctype_to_v8(v8_state vm, v8_val *ctval) {
     case V8_CTYPE_STR:
         return String::NewFromUtf8(vm->isolate, ctval->stp);
     case V8_CTYPE_PTR:
+        if (ctval->hndle)
+            return GetValueFromPersister(vm, ctval->hndle);
         if (!ctval->ptr)
             return GetValueFromPersister(vm, NULLPTR_HANDLE);
         return WrapPtr(vm, ctval->ptr);
@@ -1271,7 +1265,7 @@ static void PersistGet(const v8::FunctionCallbackInfo<v8::Value>& args) {
         v8_state vm = reinterpret_cast<v8_state>(isolate->GetData(0));
         v8Value v = GetValueFromPersister(vm, k);
         if (v.IsEmpty())
-            ThrowError(isolate, "invalid handle");
+            ThrowError(isolate, "invalid persistent handle");
         args.GetReturnValue().Set(v);
     }
 }
@@ -1598,6 +1592,7 @@ static v8_val v8_cfunc(v8_state vm, const v8_ffn *func_item) {
 static void v8_reset(v8_state vm, v8_val val) {
     switch (val.type) {
     case V8_CTYPE_STR:
+    case V8_CTYPE_ERR:
         val.type = 0;
         free(val.stp);
         val.stp = NULL;
@@ -1618,38 +1613,23 @@ static void v8_reset(v8_state vm, v8_val val) {
 
 struct WeakPtr {
     v8_state vm;
-    union {
-        Fnfree free_func;
-        FnCtype free_ctfunc;
-    };
+    void *free_func;
     Persistent<Value> handle;
     void *ptr;
 };
 
-static void WeakPtrCallback1(
-        const v8::WeakCallbackInfo<WeakPtr> &data) {
+static void WeakPtrCallback(const v8::WeakCallbackInfo<WeakPtr> &data) {
     WeakPtr *w = data.GetParameter();
     Isolate *isolate = w->vm->isolate;
-    w->free_func(w->ptr);
-    w->handle.Reset();
-    isolate->AdjustAmountOfExternalAllocatedMemory(
-                - static_cast<int64_t>(sizeof(WeakPtr)));
-#ifdef V8TEST
-    w->vm->weak_counter++;
-#endif
-    delete w;
-}
+    if (!w->free_func) {
+        free(w->ptr);
+    } else {
+        v8_val args[1];
+        args[0].type = V8_CTYPE_PTR;
+        args[0].ptr = w->ptr;
+        ((FnCtype) w->free_func)(w->vm, 1, args);
+    }
 
-// imported C function
-static void WeakPtrCallback2(
-        const v8::WeakCallbackInfo<WeakPtr> &data) {
-    WeakPtr *w = data.GetParameter();
-    Isolate *isolate = w->vm->isolate;
-    /* HandleScope handle_scope(isolate); */
-    v8_val ctvals[1];
-    ctvals[0].type = V8_CTYPE_PTR;
-    ctvals[0].ptr = w->ptr;
-    w->free_ctfunc(w->vm, 1, ctvals);   // FIXME -- check return type, should be V8_CTYPE_VOID
     w->handle.Reset();
     isolate->AdjustAmountOfExternalAllocatedMemory(
                 - static_cast<int64_t>(sizeof(WeakPtr)));
@@ -1660,9 +1640,9 @@ static void WeakPtrCallback2(
     delete w;
 }
 
-static int SetFinalizer(v8_state vm, v8Object ptrObj, Fnfree free_func) {
+static int SetFinalizer(v8_state vm, v8Object ptrObj, void *free_func) {
     Isolate *isolate = vm->isolate;
-    if (!ptrObj.IsEmpty() && !IsCtypeWeak(ptrObj) && free_func) {
+    if (!ptrObj.IsEmpty() && !IsCtypeWeak(ptrObj)) {
         void *ptr = v8External::Cast(ptrObj->GetInternalField(1))->Value();
         if (!ptr)
             return false;
@@ -1672,7 +1652,7 @@ static int SetFinalizer(v8_state vm, v8Object ptrObj, Fnfree free_func) {
         w->ptr = ptr;
         w->free_func = free_func;
         w->handle.Reset(isolate, ptrObj);
-        w->handle.SetWeak(w, WeakPtrCallback1, WeakCallbackType::kParameter);
+        w->handle.SetWeak(w, WeakPtrCallback, WeakCallbackType::kParameter);
         w->handle.MarkIndependent();
         isolate->AdjustAmountOfExternalAllocatedMemory(
                     static_cast<int64_t>(sizeof(WeakPtr)));
@@ -1681,24 +1661,10 @@ static int SetFinalizer(v8_state vm, v8Object ptrObj, Fnfree free_func) {
     return false;
 }
 
-#if 0
-// XXX: use gc() in JS.
-static int v8_dispose(v8_state vm, v8_handle h, Fnfree free_func) {
-    Isolate *isolate = vm->isolate;
-    LOCK_SCOPE(isolate)
-    v8Object ptrObj = ToPtr(GetValueFromPersister(vm, h));
-    if (SetFinalizer(vm, ptrObj, free_func)) {
-        vm->store_->Dispose(h);
-        return true;
-    }
-    return false;
-}
-#endif
-
 /*
  *  ptr.gc() => use free() as the finalizer.
  *  ptr.gc(finalizer_function).
- *  Returns the pointer: p1 = $malloc(..).gc().
+ *  Returns the pointer object.
  */
 void Gc(const FunctionCallbackInfo<Value>& args) {
     int argc = args.Length();
@@ -1715,7 +1681,7 @@ void Gc(const FunctionCallbackInfo<Value>& args) {
         return;
     }
     if (argc == 0) {
-        SetFinalizer(vm, obj, free);
+        SetFinalizer(vm, obj, nullptr);
         args.GetReturnValue().Set(obj);
         return;
     }
@@ -1726,17 +1692,7 @@ void Gc(const FunctionCallbackInfo<Value>& args) {
                     )->Value()
             );
         if ((func_item->type == FN_CTYPE) && func_item->pcount == 1) {
-            WeakPtr *w = new WeakPtr;
-            w->vm = vm;
-            w->ptr = ptr;
-            w->free_ctfunc = (FnCtype) func_item->fp;
-            w->handle.Reset(isolate, obj);
-            w->handle.SetWeak(w, WeakPtrCallback2,
-                            WeakCallbackType::kParameter);
-            SetCtypeWeak(obj);
-            w->handle.MarkIndependent();
-            isolate->AdjustAmountOfExternalAllocatedMemory(
-                        static_cast<int64_t>(sizeof(WeakPtr)));
+            SetFinalizer(vm, obj, func_item->fp);
             args.GetReturnValue().Set(obj);
             return;
         }

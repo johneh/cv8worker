@@ -18,7 +18,6 @@ extern v8_val v8_call(v8_state vm,
         v8_val func, v8_val self, int nargs, v8_val *args);
 extern v8_val v8_callstr(v8_state vm, const char *source,
         v8_val self, int nargs, v8_val *args);
-
 extern int v8_gc(v8_state vm);
 
 #endif

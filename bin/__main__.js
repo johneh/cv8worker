@@ -47,12 +47,13 @@
                 delay |= 0;
                 if (delay < 0)
                     delay = 0;
-                let t = loader.timer_create();
+                const t = loader.timer_create();
                 Object.setPrototypeOf(t, Timer.prototype);
                 t.gc(loader.timer_close);
-                t._active = true;
+                t._isActive = true;
                 return t;
             };
+
             this.setTimeout = function (callback, delay, ...args) {
                 const t = createTimer(callback, delay);
                 $co(loader.timer_start, t, delay)
@@ -60,12 +61,8 @@
                     if (x) {
                         // expired and not cancelled
                         callback(...args);
-                        t._active = false;
+                        t._isActive = false;
                     }
-                    /*
-                    else {
-                        console.log('timer previously canceled');
-                    }*/
                 });
                 return t;
             };
@@ -81,8 +78,8 @@
             };
 
             this.clearTimeout = this.clearInterval = function(t) {
-                if (t instanceof Timer && t._active) {
-                    t._active = false;
+                if (t instanceof Timer && t._isActive) {
+                    t._isActive = false;
                     loader.timer_cancel(t);
                 }
             };
@@ -338,4 +335,3 @@ function (a) {
 
     return load;
 })();
-

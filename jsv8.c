@@ -37,14 +37,17 @@ void js_vmclose(v8_state vm, const char *onexit, v8_val onexit_arg) {
     c.a[0] = onexit_arg;
     c.nargs = 1;
     c.h2 = V8_GLOBAL;
+    c.istask = 1;
     task_run(WORKER(vm), (void *) js8_do, &c, -1);
     js8_vmclose(vm);
 }
 
 
 static int v8_sched(struct js8_cmd_s *cmd) {
+    cmd->istask = 0;
     if (mill_isself(WORKER(cmd->vm)))
         return js8_do(cmd);
+    cmd->istask = 1;
     return task_run(WORKER(cmd->vm), (void *) js8_do, cmd, -1);
 }
 
@@ -108,4 +111,3 @@ int v8_gc(v8_state vm) {
     v8_sched(&c);
     return V8_TOINT32(c.h2);
 }
-

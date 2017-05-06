@@ -22,7 +22,8 @@ enum js_cmd {
 
 struct js8_cmd_s {
     enum js_cmd type;
-    int nargs;   /* call, callstr */
+    int16_t nargs;   /* call, callstr */
+    int16_t istask;
     js_vm *vm;
 
     v8_val h1;

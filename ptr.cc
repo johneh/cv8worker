@@ -700,7 +700,7 @@ static void OffsetAt(const FunctionCallbackInfo<Value>& args) {
                 WrapPtr((v8_state ) isolate->GetData(0), (char *) ptr + off));
 }
 
-static void Equal(const FunctionCallbackInfo<Value>& args) {
+static void Equals(const FunctionCallbackInfo<Value>& args) {
     int argc = args.Length();
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
@@ -737,8 +737,8 @@ void MakeCtypeProto(v8_state vm) {
                 FunctionTemplate::New(isolate, NotNull));
     ptr_templ->Set(v8STR(isolate, "offsetAt"),
                 FunctionTemplate::New(isolate, OffsetAt));
-    ptr_templ->Set(v8STR(isolate, "equal"),
-                FunctionTemplate::New(isolate, Equal));
+    ptr_templ->Set(v8STR(isolate, "equals"),
+                FunctionTemplate::New(isolate, Equals));
     ptr_templ->Set(v8STR(isolate, "packSize"),
                 FunctionTemplate::New(isolate, PackSize));
 

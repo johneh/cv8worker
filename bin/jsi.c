@@ -239,7 +239,6 @@ int main(int argc, char **argv) {
     v8_val atexit_code = jsv8->get(vm, loader, "atexit");
     v8_val atexit_data = jsv8->get(vm, loader, "atexitData");
 
-    jsv8->reset(vm, retval);
     jsv8->reset(vm, loader);
     jsv8->reset(vm, hargs);
 
