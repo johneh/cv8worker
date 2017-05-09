@@ -8,6 +8,7 @@
 #include <dlfcn.h>
 #include <math.h>
 #include <signal.h>
+#include <unordered_map>
 
 #include "v8.h"
 #include "libplatform/libplatform.h"
@@ -1327,6 +1328,7 @@ void GarbageCollected(Isolate *isolate, GCType type, GCCallbackFlags flags) {
 
 
 static void Load(const FunctionCallbackInfo<Value>& args);
+static void FindWeak(const FunctionCallbackInfo<Value>& args);
 
 // The second part of the vm initialization.
 static void CreateIsolate(v8_state vm) {
@@ -1382,6 +1384,8 @@ static void CreateIsolate(v8_state vm) {
                 FunctionTemplate::New(isolate, Unpack));
     global->Set(v8STR(isolate, "$$onPromiseReject"),
                 FunctionTemplate::New(isolate, OnPromiseReject));
+    global->Set(v8STR(isolate, "$findWeak"),
+                FunctionTemplate::New(isolate, FindWeak));
 
     v8Context context = Context::New(isolate, NULL, global);
     if (context.IsEmpty()) {
@@ -1611,12 +1615,32 @@ static void v8_reset(v8_state vm, v8_val val) {
     }
 }
 
-struct WeakPtr {
+typedef struct {
     v8_state vm;
     void *free_func;
     Persistent<Value> handle;
     void *ptr;
-};
+    uint32_t id;
+} WeakPtr;
+
+static std::unordered_map<uint32_t, WeakPtr *> weak_table;
+static uint32_t weak_id = 0;
+
+static void FindWeak(const FunctionCallbackInfo<Value>& args) {
+    ISOLATE_SCOPE(args, isolate)
+    ThrowNotEnoughArgs(isolate, args.Length() < 1);
+    uint32_t id = args[0]->Uint32Value(
+                    isolate->GetCurrentContext()).FromJust();
+    std::unordered_map<std::uint32_t, WeakPtr *>::const_iterator it =
+            weak_table.find(id);
+    if (it != weak_table.end()) {
+        WeakPtr *w = it->second;
+        args.GetReturnValue().Set(v8Value::New(isolate, w->handle));
+    } else {
+        args.GetReturnValue().Set(v8::Null(isolate));
+    }
+}
+
 
 static void WeakPtrCallback(const v8::WeakCallbackInfo<WeakPtr> &data) {
     WeakPtr *w = data.GetParameter();
@@ -1637,34 +1661,34 @@ static void WeakPtrCallback(const v8::WeakCallbackInfo<WeakPtr> &data) {
 #ifdef V8TEST
     w->vm->weak_counter++;
 #endif
+    if (w->id > 0) {
+        weak_table.erase(w->id);
+        /* fprintf(stderr, "removed weak id = %d\n", w->id); */
+    }
     delete w;
 }
 
-static int SetFinalizer(v8_state vm, v8Object ptrObj, void *free_func) {
+static WeakPtr *SetFinalizer(
+        v8_state vm, v8Object ptrObj, void *free_func) {
     Isolate *isolate = vm->isolate;
-    if (!ptrObj.IsEmpty() && !IsCtypeWeak(ptrObj)) {
-        void *ptr = v8External::Cast(ptrObj->GetInternalField(1))->Value();
-        if (!ptr)
-            return false;
-        SetCtypeWeak(ptrObj);
-        WeakPtr *w = new WeakPtr;
-        w->vm = vm;
-        w->ptr = ptr;
-        w->free_func = free_func;
-        w->handle.Reset(isolate, ptrObj);
-        w->handle.SetWeak(w, WeakPtrCallback, WeakCallbackType::kParameter);
-        w->handle.MarkIndependent();
-        isolate->AdjustAmountOfExternalAllocatedMemory(
+    void *ptr = v8External::Cast(ptrObj->GetInternalField(1))->Value();
+    WeakPtr *w = new WeakPtr;
+    w->vm = vm;
+    w->ptr = ptr;
+    w->id = 0;
+    w->free_func = free_func;
+    w->handle.Reset(isolate, ptrObj);
+    w->handle.SetWeak(w, WeakPtrCallback, WeakCallbackType::kParameter);
+    w->handle.MarkIndependent();
+    isolate->AdjustAmountOfExternalAllocatedMemory(
                     static_cast<int64_t>(sizeof(WeakPtr)));
-        return true;
-    }
-    return false;
+    return w;
 }
 
 /*
  *  ptr.gc() => use free() as the finalizer.
- *  ptr.gc(finalizer_function).
- *  Returns the pointer object.
+ *  ptr.gc(finalizer_function [, create_weak_id = true] ).
+ *  Returns weak id or 0.
  */
 void Gc(const FunctionCallbackInfo<Value>& args) {
     int argc = args.Length();
@@ -1674,15 +1698,17 @@ void Gc(const FunctionCallbackInfo<Value>& args) {
     v8_state vm = reinterpret_cast<js_vm*>(isolate->GetData(0));
     if (GetObjectId(obj) != V8EXTPTR)
         ThrowTypeError(isolate, "gc: not a pointer");
+    v8Value invalidId = Integer::New(isolate, 0);
 
     void *ptr = v8External::Cast(obj->GetInternalField(1))->Value();
     if (!ptr || IsCtypeWeak(obj)) {
-        args.GetReturnValue().Set(obj);
+        args.GetReturnValue().Set(invalidId);
         return;
     }
     if (argc == 0) {
         SetFinalizer(vm, obj, nullptr);
-        args.GetReturnValue().Set(obj);
+        SetCtypeWeak(obj);
+        args.GetReturnValue().Set(invalidId);
         return;
     }
     if (GetObjectId(args[0]) == V8EXTFUNC) {
@@ -1692,11 +1718,27 @@ void Gc(const FunctionCallbackInfo<Value>& args) {
                     )->Value()
             );
         if ((func_item->type == FN_CTYPE) && func_item->pcount == 1) {
-            SetFinalizer(vm, obj, func_item->fp);
-            args.GetReturnValue().Set(obj);
+            WeakPtr *w = SetFinalizer(vm, obj, func_item->fp);
+            SetCtypeWeak(obj);
+            if (argc > 1 && args[1]->BooleanValue(
+                    isolate->GetCurrentContext()).FromJust())
+            {
+                w->id = ++weak_id;
+                if (w->id == 0)
+                    panic(isolate, "weak id overflowed", NULL);
+                bool ok = weak_table.insert(std::make_pair(w->id, w)).second;
+                assert(ok); // XXX: panic?
+                args.GetReturnValue().Set(
+                        Integer::NewFromUnsigned(isolate, w->id));
+            } else
+                args.GetReturnValue().Set(invalidId);
             return;
-        }
+        } /* else if ((func_item->type == FN_CTYPE) && func_item->pcount == 2) {
+
+        } */
+
     }
+
     ThrowError(isolate, "gc: invalid argument");
 }
 

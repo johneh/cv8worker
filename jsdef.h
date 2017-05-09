@@ -101,6 +101,8 @@ struct v8_api_s {
 #define V8_ISHANDLE(arg)    (arg.type == V8_CTYPE_HANDLE)
 #define V8_ISUNDEF(arg) (arg.type == V8_CTYPE_VOID)
 #define V8_ISERROR(arg) (arg.type == V8_CTYPE_ERR)
+#define V8_ISNULL(arg) (arg.type == V8_CTYPE_HANDLE \
+        && arg.hndle == jsv8->null_->hndle)
 
 #define V8_ERRSTR(arg)    (arg.type == V8_CTYPE_ERR ? arg.stp : "?")
 
