@@ -4,6 +4,7 @@
 #define MAXARGS 15
 
 class PersistentStore;
+class WeakList;
 
 struct v8_fn_s;
 
@@ -37,6 +38,8 @@ struct js_vm_s {
 
     v8_handle on_promise_reject;
     int exiting;
+
+    WeakList *wl_;
 
 #ifdef V8TEST
     int weak_counter;

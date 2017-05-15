@@ -16,6 +16,7 @@
                 loader.path = '';
             modulePath = loader.path;
             if ((i = argv.indexOf('-p')) >= 0 && argc > i && argv[i+1]) {
+                // FIXME -- this is bogus, -p consumed in jsi.c
                 modulePath = argv[i+1];
                 if (loader.path)
                     modulePath += (':' + loader.path);
@@ -115,7 +116,6 @@ function (a) {
         } else
             modulePath = this.__path;	// this === parent module
 
-        // $print("modulePath =", modulePath);
 
         let path, filename;
 
@@ -126,6 +126,8 @@ function (a) {
             throw new Error('Not ready yet');
         } else if ((i = argv.indexOf('-f')) >= 0 && argc > i+1) {
             path = argv[i+1];
+            delete argv[i];
+            delete argv[i+1];
         } else {
             throw new Error('usage: jsi -f filename');
         }
@@ -139,7 +141,6 @@ function (a) {
 
         if (!filename)
             throw new Error(path + ': No such file');
-        //  $print("filename = ", filename);
 
         const cache = loader._moduleCache;
         if (({}).hasOwnProperty.call(cache, filename)) {
@@ -182,6 +183,9 @@ function (a) {
         const require = function (path, ...args) {
             return load.call(module, loader, [ "-f", path, ...args ]);
         };
+
+        // excludes already deleted entries '-f' and 'filename'.
+        module.__args = argv.filter((value) => { return true; });
 
         moduleWrap.call(exports,
                 exports,

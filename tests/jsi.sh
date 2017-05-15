@@ -1,2 +1,4 @@
 #!/bin/bash
-../bin/jsi -p ../bin "$@"
+
+PP="$HOME/t/cv8worker/bin"
+$PP/jsi -p "$PP" "$@"
