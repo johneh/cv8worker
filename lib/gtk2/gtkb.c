@@ -225,6 +225,13 @@ do_gobject_ref_count(v8_state vm, int argc, v8_val argv[]) {
     return V8_INT32(refcount);
 }
 
+static v8_val
+do_gobject_ref_sink(v8_state vm, int argc, v8_val argv[]) {
+    void *p0 = V8_TOPTR(argv[0]);
+    g_object_ref_sink(p0);
+    return V8_VOID;
+}
+
 // Debugging
 static v8_val
 do_gobject_unref(v8_state vm, int argc, v8_val argv[]) {
@@ -590,7 +597,8 @@ static v8_ffn fntab_[] = {
 { 2, do_gtype_is_a, "g_type_is_a" },
 { 1, do_gtype_instance_size, "g_type_instance_size" },
 { 2, do_g_boxed_free, "g_boxed_free" },
-{ 1, do_gobject_ref_count, "ref_count" },
+{ 1, do_gobject_ref_count, "gobject_ref_count" },
+{ 1, do_gobject_ref_sink, "gobject_ref_sink" },
 { 1, do_gobject_unref, "gobject_unref" },
 {0}
 };

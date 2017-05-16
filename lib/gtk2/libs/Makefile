@@ -14,17 +14,19 @@ all: libs js
 libs: gtkwidget.so gtkwindow.so \
 gtkcontainer.so gtkfixed.so gtklabel.so gtkbutton.so gtkhscale.so \
 gtkmisc.so gtkbox.so gtkhbox.so gtkvbox.so gtkframe.so \
-gtkentry.so gtktextbuffer.so gtktextview.so gtktextiter.so \
+gtkentry.so gtkentrybuffer.so gtkentrycompletion.so \
+gtktextbuffer.so gtktextview.so gtktextiter.so \
 gtktexttag.so gtktexttagtable.so \
 gtkscrolledwindow.so gtkstyle.so gtkenums.so gtkb.so \
 gdkcolor.so
 
-X=../js
+X=.
 js: $(X)/_gtkwidget.js $(X)/_gtkwindow.js \
 $(X)/_gtkcontainer.js $(X)/_gtkfixed.js $(X)/_gtklabel.js \
 $(X)/_gtkbutton.js $(X)/_gtkhscale.js $(X)/_gtkmisc.js \
 $(X)/_gtkbox.js $(X)/_gtkhbox.js $(X)/_gtkvbox.js $(X)/_gtkframe.js \
-$(X)/_gtkentry.js $(X)/_gtktextbuffer.js $(X)/_gtktextview.js $(X)/_gtktextiter.js \
+$(X)/_gtkentry.js $(X)/_gtkentrybuffer.js $(X)/_gtkentrycompletion.js \
+$(X)/_gtktextbuffer.js $(X)/_gtktextview.js $(X)/_gtktextiter.js \
 $(X)/_gtkscrolledwindow.js
 
 
@@ -54,6 +56,10 @@ $(X)/_gtkframe.js: gtkframe.so
 	$(JSI) -f $(CG) $^ GtkFrame > $@
 $(X)/_gtkentry.js: gtkentry.so
 	$(JSI) -f $(CG) $^ GtkEntry > $@
+$(X)/_gtkentrybuffer.js: gtkentrybuffer.so
+	$(JSI) -f $(CG) $^ GtkEntryBuffer > $@
+$(X)/_gtkentrycompletion.js: gtkentrycompletion.so
+	$(JSI) -f $(CG) $^ GtkEntryCompletion > $@
 $(X)/_gtktextbuffer.js: gtktextbuffer.so
 	$(JSI) -f $(CG) $^ GtkTextBuffer > $@
 $(X)/_gtktextview.js: gtktextview.so
@@ -116,6 +122,16 @@ $(GTK_CFLAGS) -I$(CLANG_DIR)/include > $@
 gtkentry.c:
 	$(GENCODE) --strip gtk_entry_ -include gtk/gtkentry.h \
 /usr/include/gtk-2.0/gtk/gtkentry.h -- \
+$(GTK_CFLAGS) -I$(CLANG_DIR)/include > $@
+
+gtkentrybuffer.c:
+	$(GENCODE) --strip gtk_entry_buffer_ -include gtk/gtkentrybuffer.h \
+/usr/include/gtk-2.0/gtk/gtkentrybuffer.h -- \
+$(GTK_CFLAGS) -I$(CLANG_DIR)/include > $@
+
+gtkentrycompletion.c:
+	$(GENCODE) --strip gtk_entry_completion_ -include gtk/gtkentrycompletion.h \
+/usr/include/gtk-2.0/gtk/gtkentrycompletion.h -- \
 $(GTK_CFLAGS) -I$(CLANG_DIR)/include > $@
 
 gtkframe.c:

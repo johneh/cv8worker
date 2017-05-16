@@ -144,6 +144,12 @@ function (a) {
 
         const cache = loader._moduleCache;
         if (({}).hasOwnProperty.call(cache, filename)) {
+            if (filename.lastIndexOf('.so') > 0) {
+                let dll = cache[filename].exports;
+                if (argv.indexOf('-dll') >= 0)
+                    return dll;
+                return dll.identifiers;
+            }
             return cache[filename].exports;
         }
 
