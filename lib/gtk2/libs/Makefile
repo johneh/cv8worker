@@ -11,23 +11,23 @@ CG=../codegen.js
 
 all: libs js
 
-libs: gtkwidget.so gtkwindow.so \
-gtkcontainer.so gtkfixed.so gtklabel.so gtkbutton.so gtkhscale.so \
+libs: gtkwidget.so gtkwindow.so gtkcontainer.so gtkalignment.so \
+gtkfixed.so gtklabel.so gtkbutton.so gtkhscale.so \
 gtkmisc.so gtkbox.so gtkhbox.so gtkvbox.so gtkframe.so \
-gtkentry.so gtkentrybuffer.so gtkentrycompletion.so \
+gtkentry.so gtkentrybuffer.so gtkentrycompletion.so gtkeditable.so \
 gtktextbuffer.so gtktextview.so gtktextiter.so \
-gtktexttag.so gtktexttagtable.so \
+gtktexttag.so gtktexttagtable.so gtkadjustment.so \
 gtkscrolledwindow.so gtkstyle.so gtkenums.so gtkb.so \
-gdkcolor.so
+gdkcolor.so 
 
 X=.
 js: $(X)/_gtkwidget.js $(X)/_gtkwindow.js \
-$(X)/_gtkcontainer.js $(X)/_gtkfixed.js $(X)/_gtklabel.js \
+$(X)/_gtkcontainer.js $(X)/_gtkalignment.js $(X)/_gtkfixed.js $(X)/_gtklabel.js \
 $(X)/_gtkbutton.js $(X)/_gtkhscale.js $(X)/_gtkmisc.js \
 $(X)/_gtkbox.js $(X)/_gtkhbox.js $(X)/_gtkvbox.js $(X)/_gtkframe.js \
-$(X)/_gtkentry.js $(X)/_gtkentrybuffer.js $(X)/_gtkentrycompletion.js \
+$(X)/_gtkentry.js $(X)/_gtkentrybuffer.js $(X)/_gtkentrycompletion.js $(X)/_gtkeditable.js \
 $(X)/_gtktextbuffer.js $(X)/_gtktextview.js $(X)/_gtktextiter.js \
-$(X)/_gtkscrolledwindow.js
+$(X)/_gtkscrolledwindow.js $(X)/_gtkadjustment.js
 
 
 $(X)/_gtkwidget.js: gtkwidget.so
@@ -36,6 +36,8 @@ $(X)/_gtkwindow.js: gtkwindow.so
 	$(JSI) -f $(CG) $^ GtkWindow > $@
 $(X)/_gtkcontainer.js: gtkcontainer.so
 	$(JSI) -f $(CG) $^ GtkContainer > $@
+$(X)/_gtkalignment.js: gtkalignment.so
+	$(JSI) -f $(CG) $^ GtkAlignment > $@
 $(X)/_gtkfixed.js: gtkfixed.so
 	$(JSI) -f $(CG) $^ GtkFixed > $@
 $(X)/_gtklabel.js: gtklabel.so
@@ -60,6 +62,8 @@ $(X)/_gtkentrybuffer.js: gtkentrybuffer.so
 	$(JSI) -f $(CG) $^ GtkEntryBuffer > $@
 $(X)/_gtkentrycompletion.js: gtkentrycompletion.so
 	$(JSI) -f $(CG) $^ GtkEntryCompletion > $@
+$(X)/_gtkeditable.js: gtkeditable.so
+	$(JSI) -f $(CG) $^ GtkEditable > $@
 $(X)/_gtktextbuffer.js: gtktextbuffer.so
 	$(JSI) -f $(CG) $^ GtkTextBuffer > $@
 $(X)/_gtktextview.js: gtktextview.so
@@ -68,6 +72,8 @@ $(X)/_gtktextiter.js: gtktextiter.so
 	$(JSI) -f $(CG) $^ GtkTextIter > $@
 $(X)/_gtkscrolledwindow.js: gtkscrolledwindow.so
 	$(JSI) -f $(CG) $^ GtkScrolledWindow > $@
+$(X)/_gtkadjustment.js: gtkadjustment.so
+	$(JSI) -f $(CG) $^ GtkAdjustment > $@
 
 
 SO_CFLAGS = -fPIC -Wall -c -g -I. -I$(TOPDIR)
@@ -109,6 +115,11 @@ gtkfixed.c:
 /usr/include/gtk-2.0/gtk/gtkfixed.h -- \
 $(GTK_CFLAGS) -I$(CLANG_DIR)/include > $@
 
+gtkalignment.c:
+	$(GENCODE) --strip gtk_alignment_ -include gtk/gtkalignment.h \
+/usr/include/gtk-2.0/gtk/gtkalignment.h -- \
+$(GTK_CFLAGS) -I$(CLANG_DIR)/include > $@
+
 gtklabel.c:
 	$(GENCODE) --strip gtk_label_ -include gtk/gtklabel.h \
 /usr/include/gtk-2.0/gtk/gtklabel.h -- \
@@ -132,6 +143,11 @@ $(GTK_CFLAGS) -I$(CLANG_DIR)/include > $@
 gtkentrycompletion.c:
 	$(GENCODE) --strip gtk_entry_completion_ -include gtk/gtkentrycompletion.h \
 /usr/include/gtk-2.0/gtk/gtkentrycompletion.h -- \
+$(GTK_CFLAGS) -I$(CLANG_DIR)/include > $@
+
+gtkeditable.c:
+	$(GENCODE) --strip gtk_editable_ -include gtk/gtkeditable.h \
+/usr/include/gtk-2.0/gtk/gtkeditable.h -- \
 $(GTK_CFLAGS) -I$(CLANG_DIR)/include > $@
 
 gtkframe.c:
@@ -204,6 +220,10 @@ $(GTK_CFLAGS) -I$(CLANG_DIR)/include > $@
 #-nowrap gtk_list_store_set_valist /usr/include/gtk-2.0/gtk/gtkliststore.h -- \
 #$(GTK_CFLAGS) -I$(CLANG_DIR)/include > $@
 
+gtkadjustment.c:
+	$(GENCODE) --strip gtk_adjustment_ -include gtk/gtkadjustment.h \
+/usr/include/gtk-2.0/gtk/gtkadjustment.h -- \
+$(GTK_CFLAGS) -I$(CLANG_DIR)/include > $@
 
 # have gtk_style_ and gtk_paint_; strip gtk_ only
 gtkstyle.c:

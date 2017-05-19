@@ -706,23 +706,6 @@ static void EvalString(const FunctionCallbackInfo<Value>& args) {
     args.GetReturnValue().Set(result);
 }
 
-// malloc(size [, zerofill] )
-static void Malloc(const v8::FunctionCallbackInfo<v8::Value>& args) {
-    ISOLATE_SCOPE(args, isolate)
-    int argc = args.Length();
-    ThrowNotEnoughArgs(isolate, argc < 1);
-    v8Context context = isolate->GetCurrentContext();
-    int size = args[0]->Int32Value(context).FromJust();
-    if (size <= 0)
-        ThrowError(isolate, "$malloc: invalid size argument");
-    void *ptr = emalloc(size);
-    if (argc > 1 && args[1]->BooleanValue(context).FromJust())
-        memset(ptr, '\0', size);
-    v8Object ptrObj = WrapPtr(
-            reinterpret_cast<js_vm*>(isolate->GetData(0)), ptr);
-    args.GetReturnValue().Set(ptrObj);
-}
-
 // $isPointer(v [, isNotNull = false])
 static void IsPointer(const FunctionCallbackInfo<Value>& args) {
     ISOLATE_SCOPE(args, isolate)
@@ -1513,6 +1496,24 @@ static void FindWeak(const FunctionCallbackInfo<Value>& args) {
     } else {
         args.GetReturnValue().Set(v8::Null(isolate));
     }
+}
+
+// malloc(size [, zerofill] )
+static void Malloc(const v8::FunctionCallbackInfo<v8::Value>& args) {
+    ISOLATE_SCOPE(args, isolate)
+    int argc = args.Length();
+    ThrowNotEnoughArgs(isolate, argc < 1);
+    v8Context context = isolate->GetCurrentContext();
+    v8_state vm = reinterpret_cast<v8_state>(isolate->GetData(0));
+    int size = args[0]->Int32Value(context).FromJust();
+    if (size <= 0)
+        ThrowError(isolate, "$malloc: invalid size argument");
+    void *ptr = emalloc(size);
+    if (argc > 1 && args[1]->BooleanValue(context).FromJust())
+        memset(ptr, '\0', size);
+    v8Object ptrObj = WrapPtr(vm, ptr);
+    (void) WeakPtr::Create(vm, ptrObj, nullptr);
+    args.GetReturnValue().Set(ptrObj);
 }
 
 
