@@ -4,19 +4,10 @@
 
 const gtkenums = require('./gtkenums.so');
 
-const GtkWindow = Object.create(GTYPES['GtkContainer'].proto);
-
-function initGtkWindow(wptr) {
-    if (!GtkWindow.isPrototypeOf(wptr))
-        Object.setPrototypeOf(wptr, GtkWindow);
-    GTYPES['GtkContainer'].init(wptr);
-}
-
-
-register_gtype('GtkWindow', GtkWindow, gtklib.get_type(), initGtkWindow);
+ctype('GtkWindow', 'GtkContainer', lib.get_type());
 
 module.exports = function(wintype = gtkenums.GTK_WINDOW_TOPLEVEL) {
-    let w = gtklib.new(wintype);
-    initGtkWindow(w);
+    let w = lib.new(wintype);
+    CTYPES['GtkWindow'].init(w);
     return w;
 };

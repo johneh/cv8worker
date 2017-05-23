@@ -1,4 +1,5 @@
-register_gtype('GtkEditable',
+// interface type
+ctype('GtkEditable',
     Object.create(Object.getPrototypeOf($nullptr)),
-    gtklib.get_type()
+    lib.get_type()
 );

@@ -18,7 +18,7 @@ gtkentry.so gtkentrybuffer.so gtkentrycompletion.so gtkeditable.so \
 gtktextbuffer.so gtktextview.so gtktextiter.so \
 gtktexttag.so gtktexttagtable.so gtkadjustment.so \
 gtkscrolledwindow.so gtkstyle.so gtkenums.so gtkb.so \
-gdkcolor.so 
+gdkcolor.so gtkdrawingarea.so gtkdialog.so
 
 X=.
 js: $(X)/_gtkwidget.js $(X)/_gtkwindow.js \
@@ -27,7 +27,8 @@ $(X)/_gtkbutton.js $(X)/_gtkhscale.js $(X)/_gtkmisc.js \
 $(X)/_gtkbox.js $(X)/_gtkhbox.js $(X)/_gtkvbox.js $(X)/_gtkframe.js \
 $(X)/_gtkentry.js $(X)/_gtkentrybuffer.js $(X)/_gtkentrycompletion.js $(X)/_gtkeditable.js \
 $(X)/_gtktextbuffer.js $(X)/_gtktextview.js $(X)/_gtktextiter.js \
-$(X)/_gtkscrolledwindow.js $(X)/_gtkadjustment.js
+$(X)/_gtkscrolledwindow.js $(X)/_gtkadjustment.js $(X)/_gtkdrawingarea.js \
+$(X)/_gtkdialog.js
 
 
 $(X)/_gtkwidget.js: gtkwidget.so
@@ -74,7 +75,10 @@ $(X)/_gtkscrolledwindow.js: gtkscrolledwindow.so
 	$(JSI) -f $(CG) $^ GtkScrolledWindow > $@
 $(X)/_gtkadjustment.js: gtkadjustment.so
 	$(JSI) -f $(CG) $^ GtkAdjustment > $@
-
+$(X)/_gtkdrawingarea.js: gtkdrawingarea.so
+	$(JSI) -f $(CG) $^ GtkDrawingArea > $@
+$(X)/_gtkdialog.js: gtkdialog.so
+	$(JSI) -f $(CG) $^ GtkDialog > $@
 
 SO_CFLAGS = -fPIC -Wall -c -g -I. -I$(TOPDIR)
 SO_LDFLAGS = -shared
@@ -213,6 +217,16 @@ $(GTK_CFLAGS) -I$(CLANG_DIR)/include > $@
 gtkscrolledwindow.c:
 	$(GENCODE) --strip gtk_scrolled_window_ -include gtk/gtkscrolledwindow.h \
 /usr/include/gtk-2.0/gtk/gtkscrolledwindow.h -- \
+$(GTK_CFLAGS) -I$(CLANG_DIR)/include > $@
+
+gtkdrawingarea.c:
+	$(GENCODE) --strip gtk_drawing_area_ -include gtk/gtkdrawingarea.h \
+/usr/include/gtk-2.0/gtk/gtkdrawingarea.h -- \
+$(GTK_CFLAGS) -I$(CLANG_DIR)/include > $@
+
+gtkdialog.c:
+	$(GENCODE) --strip gtk_dialog_ -include gtk/gtkdialog.h \
+/usr/include/gtk-2.0/gtk/gtkdialog.h -- \
 $(GTK_CFLAGS) -I$(CLANG_DIR)/include > $@
 
 #gtkliststore.c:

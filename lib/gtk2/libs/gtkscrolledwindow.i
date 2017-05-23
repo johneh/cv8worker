@@ -2,19 +2,10 @@
 // GtkScrolledWindow <- GtkContainer <- GtkWidget.
 //###############################################################
 
-const GtkScrolledWindow = Object.create(GTYPES['GtkContainer'].proto);
-
-function initGtkScrolledWindow(wptr) {
-    if (!GtkScrolledWindow.isPrototypeOf(wptr))
-        Object.setPrototypeOf(wptr, GtkScrolledWindow);
-    GTYPES['GtkContainer'].init(wptr);
-}
-
-register_gtype('GtkScrolledWindow', GtkScrolledWindow,
-        gtklib.get_type(), initGtkScrolledWindow);
+ctype('GtkScrolledWindow', 'GtkContainer', lib.get_type());
 
 module.exports = function() {
-    let sw = gtklib.new($nullptr, $nullptr);
-    initGtkScrolledWindow(sw);
+    let sw = lib.new($nullptr, $nullptr);
+    CTYPES['GtkScrolledWindow'].init(sw);
     return sw;
 };

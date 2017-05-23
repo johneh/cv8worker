@@ -1,24 +1,15 @@
 //###############################################
 // GtkTextView <- GtkContainer <- GtkWidget.
 //###############################################
-
-const GtkTextView = Object.create(GTYPES['GtkContainer'].proto);
-
-function initGtkTextView(wptr) {
-    if (!GtkTextView.isPrototypeOf(wptr))
-        Object.setPrototypeOf(wptr, GtkTextView);
-    GTYPES['GtkContainer'].init(wptr);
-}
-
-register_gtype('GtkTextView', GtkTextView, gtklib.get_type(), initGtkTextView);
+ctype('GtkTextView', 'GtkContainer', lib.get_type());
 
 module.exports = function(textbuf) {
     let textview;
-    if (textbuf && GTYPES['GtkTextBuffer'].proto.isPrototypeOf(textbuf)) {
-        textview = gtklib.new_with_buffer(textbuf); // increments ref. count.
+    if (textbuf && isa(textbuf, 'GtkTextBuffer')) {
+        textview = lib.new_with_buffer(textbuf); // increments ref. count.
     } else {
-        textview = gtklib.new();
+        textview = lib.new();
     }
-    initGtkTextView(textview);
+    CTYPES['GtkTextView'].init(textview);
     return textview;
 };

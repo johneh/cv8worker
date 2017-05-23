@@ -1,16 +1,7 @@
-const GtkEntryCompletion = Object.create(GTYPES['GObject'].proto);
-
-function initGtkEntryCompletion(wptr) {
-    if (!GtkEntryCompletion.isPrototypeOf(wptr))
-        Object.setPrototypeOf(wptr, GtkEntryCompletion);
-    GTYPES['GObject'].init(wptr);
-}
-
-register_gtype('GtkEntryCompletion', GtkEntryCompletion,
-        gtklib.get_type(), initGtkEntryCompletion);
+ctype('GtkEntryCompletion', 'GObject', lib.get_type());
 
 module.exports = function() {
-    const ec = gtklib.new();
-    initGtkEntryCompletion(ec);
+    const ec = lib.new();
+    CTYPES['GtkEntryCompletion'].init(ec);
     return ec;
 };

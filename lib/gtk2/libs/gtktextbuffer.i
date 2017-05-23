@@ -1,16 +1,7 @@
-const GtkTextBuffer = Object.create(GTYPES['GObject'].proto);
-
-function initGtkTextBuffer(wptr) {
-    if (!GtkTextBuffer.isPrototypeOf(wptr))
-        Object.setPrototypeOf(wptr, GtkTextBuffer);
-    GTYPES['GObject'].init(wptr);
-}
-
-register_gtype('GtkTextBuffer', GtkTextBuffer,
-        gtklib.get_type(), initGtkTextBuffer);
+ctype('GtkTextBuffer', 'GObject', lib.get_type());
 
 module.exports = function() {
-    const tb = gtklib.new($nullptr);
-    initGtkTextBuffer(tb);
+    const tb = lib.new($nullptr);
+    CTYPES['GtkTextBuffer'].init(tb);
     return tb;
 };

@@ -2,23 +2,15 @@
 // GtkLabel <- GtkMisc <- GtkWidget.
 //########################################
 
-const GtkLabel = Object.create(GTYPES['GtkMisc'].proto);
-
-function initGtkLabel(wptr) {
-    if (!GtkLabel.isPrototypeOf(wptr))
-        Object.setPrototypeOf(wptr, GtkLabel);
-    GTYPES['GtkMisc'].init(wptr);
-}
-
-register_gtype('GtkLabel', GtkLabel, gtklib.get_type(), initGtkLabel);
+ctype('GtkLabel', 'GtkMisc', lib.get_type());
 
 module.exports = function(text) {
     let w;
     if (typeof text === 'string') {
-        w = gtklib.new(text);
+        w = lib.new(text);
     } else {
-        w = gtklib.new($nullptr);
+        w = lib.new($nullptr);
     }
-    initGtkLabel(w);
+    CTYPES['GtkLabel'].init(w);
     return w;
 };

@@ -266,6 +266,9 @@ gtype_to_js(v8_state vm, GType gtype, gpointer vp) {
     v8_val a[3];
     v8_val retv;
     char *gname = (char *) g_type_name(gtype);
+    /* fprintf(stderr, "gtype = %lld, g_type_name = %s\n",
+            (long long) gtype, gname); */
+
     a[0] = V8_STR(gname, strlen(gname));
     a[1] = V8_DOUBLE(gtype); // XXX: gsize (ulong)
     a[2] = V8_PTR(vp);
@@ -531,7 +534,11 @@ do_gobject_set_id(v8_state vm, int argc, v8_val argv[]) {
 static v8_val
 do_gtype_name(v8_state vm, int argc, v8_val argv[]) {
     GType gtype = V8_TODOUBLE(argv[0]);
-    char *name = (char *) g_type_name(gtype);
+    char *name = NULL;
+    if (gtype > 0)
+        name = (char *) g_type_name(gtype);
+    if (!name)
+        return V8_NULL;
     return V8_STR(name, strlen(name));
 }
 

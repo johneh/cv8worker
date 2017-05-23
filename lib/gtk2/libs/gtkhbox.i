@@ -1,21 +1,24 @@
 //#######################################################
 // GtkHBox <- GtkBox <- GtkContainer <- GtkWidget.
 //#######################################################
-
-const GtkHBox = Object.create(GTYPES['GtkBox'].proto);
-
-function initGtkHBox(wptr) {
-    if (!GtkHBox.isPrototypeOf(wptr))
-        Object.setPrototypeOf(wptr, GtkHBox);
-    GTYPES['GtkBox'].init(wptr);
-}
-
-register_gtype('GtkHBox', GtkHBox, gtklib.get_type(), initGtkHBox);
+ctype('GtkHBox', 'GtkBox', lib.get_type());
 
 module.exports = function(homogeneous = false, spacing = 0) {
     spacing = spacing|0;
     if (spacing < 0) spacing = 0;
-    let hbox = gtklib.new(!!homogeneous, spacing);
-    initGtkHBox(hbox);
+    let hbox = lib.new(!!homogeneous, spacing);
+    CTYPES['GtkHBox'].init(hbox);
+/*
+    {
+        let p = hbox.__proto__;
+        do {
+            if (! ({}).hasOwnProperty.call(p, '__ctype__'))
+                break;
+            $print(p.__ctype__);
+            p = p.__proto__;
+        } while (!$isPointer(p));
+        $print('==================================');
+    }
+*/
     return hbox;
 };

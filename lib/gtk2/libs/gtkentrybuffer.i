@@ -1,21 +1,12 @@
-const GtkEntryBuffer = Object.create(GTYPES['GObject'].proto);
-
-function initGtkEntryBuffer(wptr) {
-    if ($GtkEntryBuffer.isPrototypeOf(wptr))
-        Object.setPrototypeOf(wptr, GtkEntryBuffer);
-    GTYPES['GObject'].init(wptr);
-}
-
-register_gtype('GtkEntryBuffer', GtkEntryBuffer,
-        gtklib.get_type(), initGtkEntryBuffer);
+ctype('GtkEntryBuffer', 'GObject', lib.get_type());
 
 module.exports = function(s) {
     let eb;
     if (typeof s === 'string')
-        eb = gtklib.new(s, s.length);
+        eb = lib.new(s, s.length);
     else
-        eb = gtklib.new($nullptr, 0);
-    initGtkEntryBuffer(eb);
+        eb = lib.new($nullptr, 0);
+    CTYPES['GtkEntryBuffer'].init(eb);
     return eb;
 };
 

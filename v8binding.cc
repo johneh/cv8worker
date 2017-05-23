@@ -1452,8 +1452,7 @@ void Gc(const FunctionCallbackInfo<Value>& args) {
 
     void *ptr = v8External::Cast(obj->GetInternalField(1))->Value();
     if (!ptr || IsCtypeWeak(obj)) {
-        args.GetReturnValue().Set(invalidId);
-        return;
+        ThrowError(isolate, "gc: pointer is null or previously gc-ed");
     }
     if (argc == 0) {
         (void) WeakPtr::Create(vm, obj, nullptr);
