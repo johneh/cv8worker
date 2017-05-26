@@ -494,6 +494,19 @@ do_style_get_property(v8_state vm, int argc, v8_val argv[]) {
     return retv;
 }
 
+static v8_val
+do_get_current_event(v8_state vm, int argc, v8_val argv[]) {
+    GdkEvent *ev = gtk_get_current_event();
+    return V8_PTR(ev);
+}
+
+static v8_val
+do_gdk_event_free(v8_state vm, int argc, v8_val argv[]) {
+    GdkEvent *ev = V8_TOPTR(argv[0]);
+    gdk_event_free(ev);
+    return V8_VOID;
+}
+
 // FIXME -- move to gobject.c
 static v8_val
 do_gobject_type(v8_state vm, int argc, v8_val argv[]) {
@@ -597,6 +610,8 @@ static v8_ffn fntab_[] = {
 { 2, do_style_get_property, "style_get_property" },
 { 0, do_xflush, "xflush"},
 { 0, do_pending_events, "do_pending_events" },
+{ 0, do_get_current_event, "get_current_event" },
+{ 1, do_gdk_event_free, "gdk_event_free" },
 { 1, do_get_param, "_get_param" },
 { 1, do_gobject_type, "gobject_type" },
 { 1, do_gtype_name, "g_type_name" },

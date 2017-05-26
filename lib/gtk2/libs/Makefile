@@ -18,7 +18,9 @@ gtkentry.so gtkentrybuffer.so gtkentrycompletion.so gtkeditable.so \
 gtktextbuffer.so gtktextview.so gtktextiter.so \
 gtktexttag.so gtktexttagtable.so gtkadjustment.so \
 gtkscrolledwindow.so gtkstyle.so gtkenums.so gtkb.so \
-gdkcolor.so gtkdrawingarea.so gtkdialog.so
+gtkdrawingarea.so gtkdialog.so gtkeventbox.so \
+gtkmenushell.so gtkmenu.so gtkmenuitem.so \
+gdkevents.so gdkcolor.so
 
 X=.
 js: $(X)/_gtkwidget.js $(X)/_gtkwindow.js \
@@ -28,7 +30,8 @@ $(X)/_gtkbox.js $(X)/_gtkhbox.js $(X)/_gtkvbox.js $(X)/_gtkframe.js \
 $(X)/_gtkentry.js $(X)/_gtkentrybuffer.js $(X)/_gtkentrycompletion.js $(X)/_gtkeditable.js \
 $(X)/_gtktextbuffer.js $(X)/_gtktextview.js $(X)/_gtktextiter.js \
 $(X)/_gtkscrolledwindow.js $(X)/_gtkadjustment.js $(X)/_gtkdrawingarea.js \
-$(X)/_gtkdialog.js
+$(X)/_gtkdialog.js $(X)/_gtkeventbox.js \
+$(X)/_gtkmenushell.js $(X)/_gtkmenu.js $(X)/_gtkmenuitem.js
 
 
 $(X)/_gtkwidget.js: gtkwidget.so
@@ -79,6 +82,15 @@ $(X)/_gtkdrawingarea.js: gtkdrawingarea.so
 	$(JSI) -f $(CG) $^ GtkDrawingArea > $@
 $(X)/_gtkdialog.js: gtkdialog.so
 	$(JSI) -f $(CG) $^ GtkDialog > $@
+$(X)/_gtkmenushell.js: gtkmenushell.so
+	$(JSI) -f $(CG) $^ GtkMenuShell > $@
+$(X)/_gtkmenu.js: gtkmenu.so
+	$(JSI) -f $(CG) $^ GtkMenu > $@
+$(X)/_gtkmenuitem.js: gtkmenuitem.so
+	$(JSI) -f $(CG) $^ GtkMenuItem > $@
+$(X)/_gtkeventbox.js: gtkeventbox.so
+	$(JSI) -f $(CG) $^ GtkEventBox > $@
+
 
 SO_CFLAGS = -fPIC -Wall -c -g -I. -I$(TOPDIR)
 SO_LDFLAGS = -shared
@@ -229,6 +241,26 @@ gtkdialog.c:
 /usr/include/gtk-2.0/gtk/gtkdialog.h -- \
 $(GTK_CFLAGS) -I$(CLANG_DIR)/include > $@
 
+gtkmenushell.c:
+	$(GENCODE) --strip gtk_menu_shell_ -include gtk/gtkmenushell.h \
+/usr/include/gtk-2.0/gtk/gtkmenushell.h -- \
+$(GTK_CFLAGS) -I$(CLANG_DIR)/include > $@
+
+gtkmenu.c:
+	$(GENCODE) --strip gtk_menu_ -include gtk/gtkmenu.h \
+/usr/include/gtk-2.0/gtk/gtkmenu.h -- \
+$(GTK_CFLAGS) -I$(CLANG_DIR)/include > $@
+
+gtkmenuitem.c:
+	$(GENCODE) --strip gtk_menu_item_ -include gtk/gtkmenuitem.h \
+/usr/include/gtk-2.0/gtk/gtkmenuitem.h -- \
+$(GTK_CFLAGS) -I$(CLANG_DIR)/include > $@
+
+gtkeventbox.c:
+	$(GENCODE) --strip gtk_event_box_ -include gtk/gtkeventbox.h \
+/usr/include/gtk-2.0/gtk/gtkeventbox.h -- \
+$(GTK_CFLAGS) -I$(CLANG_DIR)/include > $@
+
 #gtkliststore.c:
 #	$(GENCODE) --strip gtk_list_store_ -include gtk/gtkliststore.h \
 #-nowrap gtk_list_store_set_valist /usr/include/gtk-2.0/gtk/gtkliststore.h -- \
@@ -248,6 +280,11 @@ $(GTK_CFLAGS) -I$(CLANG_DIR)/include > $@
 gdkcolor.c:
 	$(GENCODE) --strip gdk_ -include gdk/gdk.h \
 /usr/include/gtk-2.0/gdk/gdkcolor.h -- \
+$(GTK_CFLAGS) -I$(CLANG_DIR)/include > $@
+
+gdkevents.c:
+	$(GENCODE) --strip gdk_event_ -include gdk/gdk.h \
+/usr/include/gtk-2.0/gdk/gdkevents.h -- \
 $(GTK_CFLAGS) -I$(CLANG_DIR)/include > $@
 
 
