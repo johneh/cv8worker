@@ -19,7 +19,8 @@ gtktextbuffer.so gtktextview.so gtktextiter.so \
 gtktexttag.so gtktexttagtable.so gtkadjustment.so \
 gtkscrolledwindow.so gtkstyle.so gtkenums.so gtkb.so \
 gtkdrawingarea.so gtkdialog.so gtkeventbox.so \
-gtkmenushell.so gtkmenu.so gtkmenuitem.so \
+gtkmenushell.so gtkmenu.so gtkmenuitem.so gtkmenubar.so \
+gtkstatusbar.so gtktoolshell.so gtktoolitem.so gtktoolbutton.so gtktoolbar.so \
 gdkevents.so gdkcolor.so
 
 X=.
@@ -31,7 +32,9 @@ $(X)/_gtkentry.js $(X)/_gtkentrybuffer.js $(X)/_gtkentrycompletion.js $(X)/_gtke
 $(X)/_gtktextbuffer.js $(X)/_gtktextview.js $(X)/_gtktextiter.js \
 $(X)/_gtkscrolledwindow.js $(X)/_gtkadjustment.js $(X)/_gtkdrawingarea.js \
 $(X)/_gtkdialog.js $(X)/_gtkeventbox.js \
-$(X)/_gtkmenushell.js $(X)/_gtkmenu.js $(X)/_gtkmenuitem.js
+$(X)/_gtkmenushell.js $(X)/_gtkmenu.js $(X)/_gtkmenuitem.js $(X)/_gtkmenubar.js \
+$(X)/_gtkstatusbar.js $(X)/_gtktoolshell.js $(X)/_gtktoolitem.js $(X)/_gtktoolbutton.js \
+$(X)/_gtktoolbar.js
 
 
 $(X)/_gtkwidget.js: gtkwidget.so
@@ -88,8 +91,20 @@ $(X)/_gtkmenu.js: gtkmenu.so
 	$(JSI) -f $(CG) $^ GtkMenu > $@
 $(X)/_gtkmenuitem.js: gtkmenuitem.so
 	$(JSI) -f $(CG) $^ GtkMenuItem > $@
+$(X)/_gtkmenubar.js: gtkmenubar.so
+	$(JSI) -f $(CG) $^ GtkMenuBar > $@
 $(X)/_gtkeventbox.js: gtkeventbox.so
 	$(JSI) -f $(CG) $^ GtkEventBox > $@
+$(X)/_gtkstatusbar.js: gtkstatusbar.so
+	$(JSI) -f $(CG) $^ GtkStatusbar > $@
+$(X)/_gtktoolshell.js: gtktoolshell.so
+	$(JSI) -f $(CG) $^ GtkToolShell > $@
+$(X)/_gtktoolitem.js: gtktoolitem.so
+	$(JSI) -f $(CG) $^ GtkToolItem > $@
+$(X)/_gtktoolbutton.js: gtktoolbutton.so
+	$(JSI) -f $(CG) $^ GtkToolButton > $@
+$(X)/_gtktoolbar.js: gtktoolbar.so
+	$(JSI) -f $(CG) $^ GtkToolbar > $@
 
 
 SO_CFLAGS = -fPIC -Wall -c -g -I. -I$(TOPDIR)
@@ -256,10 +271,40 @@ gtkmenuitem.c:
 /usr/include/gtk-2.0/gtk/gtkmenuitem.h -- \
 $(GTK_CFLAGS) -I$(CLANG_DIR)/include > $@
 
+gtkmenubar.c:
+	$(GENCODE) --strip gtk_menu_bar_ -include gtk/gtkmenubar.h \
+/usr/include/gtk-2.0/gtk/gtkmenubar.h -- \
+$(GTK_CFLAGS) -I$(CLANG_DIR)/include > $@
+
 gtkeventbox.c:
 	$(GENCODE) --strip gtk_event_box_ -include gtk/gtkeventbox.h \
 /usr/include/gtk-2.0/gtk/gtkeventbox.h -- \
 $(GTK_CFLAGS) -I$(CLANG_DIR)/include > $@
+
+gtkstatusbar.c:
+	$(GENCODE) --strip gtk_statusbar_ -include gtk/gtkstatusbar.h \
+/usr/include/gtk-2.0/gtk/gtkstatusbar.h -- \
+$(GTK_CFLAGS) -I$(CLANG_DIR)/include > $@
+
+gtktoolshell.c:
+	$(GENCODE) --strip gtk_tool_shell_ -include gtk/gtk.h \
+/usr/include/gtk-2.0/gtk/gtktoolshell.h -- \
+$(GTK_CFLAGS) -I$(CLANG_DIR)/include -D__GTK_H_INSIDE__=1 -DGTK_COMPILATION=1 > $@
+
+gtktoolitem.c:
+	$(GENCODE) --strip gtk_tool_item_ -include gtk/gtktoolitem.h \
+/usr/include/gtk-2.0/gtk/gtktoolitem.h -- \
+$(GTK_CFLAGS) -I$(CLANG_DIR)/include  > $@
+
+gtktoolbutton.c:
+	$(GENCODE) --strip gtk_tool_button_ -include gtk/gtktoolbutton.h \
+/usr/include/gtk-2.0/gtk/gtktoolbutton.h -- \
+$(GTK_CFLAGS) -I$(CLANG_DIR)/include  > $@
+
+gtktoolbar.c:
+	$(GENCODE) --strip gtk_toolbar_ -include gtk/gtktoolbar.h \
+/usr/include/gtk-2.0/gtk/gtktoolbar.h -- \
+$(GTK_CFLAGS) -I$(CLANG_DIR)/include  > $@
 
 #gtkliststore.c:
 #	$(GENCODE) --strip gtk_list_store_ -include gtk/gtkliststore.h \

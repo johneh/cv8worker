@@ -218,6 +218,13 @@ do_pending_events(v8_state vm, int argc, v8_val argv[]) {
 }
 
 static v8_val
+do_gtk_main_iteration_do(v8_state vm, int argc, v8_val argv[]) {
+    int blocking = V8_TOINT32(argv[0]);
+    gtk_main_iteration_do(blocking);
+    return V8_VOID;
+}
+
+static v8_val
 do_gobject_ref_count(v8_state vm, int argc, v8_val argv[]) {
     void *ptr = V8_TOPTR(argv[0]);
     // N.B: there is no public api to get the current reference count
@@ -609,6 +616,7 @@ static v8_ffn fntab_[] = {
 { 3, do_set_property, "set_property" },
 { 2, do_style_get_property, "style_get_property" },
 { 0, do_xflush, "xflush"},
+{ 1, do_gtk_main_iteration_do, "main_iteration_do" },
 { 0, do_pending_events, "do_pending_events" },
 { 0, do_get_current_event, "get_current_event" },
 { 1, do_gdk_event_free, "gdk_event_free" },
