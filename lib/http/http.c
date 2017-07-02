@@ -255,21 +255,26 @@ decode_chunked(struct decoder_s *decoder, char *buf, int *size) {
     for(;;) {
         switch (decoder->state) {
         case STATE_CHUNK_SIZE: {
-            int bchunk = 0;
+            unsigned bchunk = 0;
             int nhex = 0, v;
             for (;;++sp) {
                 if (sp == end)
                     return CHUNK_INCOMPLETE;
-                v = DECODE_HEX(sp[0]);
-                if (v == -1) {
+                if (sp[0] == '\r') {
                     if (nhex > 0)
                         break;
                     return CHUNK_ERROR;
                 }
-                if (nhex == 7) /* TODO allow intmax 0x7fffffff */
+                v = DECODE_HEX(sp[0]);
+                if (v == -1 || nhex == 8) {
                     return CHUNK_ERROR;
+                }
                 bchunk = bchunk * 16 + v;
                 nhex++;
+            }
+            if (bchunk > INT_MAX) {
+                fprintf(stderr, "a big chunk!\n");
+                return CHUNK_ERROR;
             }
             decoder->bytes_in_chunk = bchunk;
             decoder->state = STATE_CHUNK_EXT;
@@ -387,7 +392,6 @@ static int chunked_data(char *buf, int size, void *data) {
 static int
 fetch_chunked_body(struct http_s *s) {
     int rc, last_len;
-
     for(;;) {
         last_len = s->buf_len;
         rc = decode_chunked(&s->decoder, s->buf, &last_len);

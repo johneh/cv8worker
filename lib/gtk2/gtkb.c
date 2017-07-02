@@ -81,7 +81,6 @@ js_g_closure_marshal(GClosure *closure,
 
     v8_val ret = jsv8->call(jc->vm, V8_HANDLE(jc->hcb), V8_GLOBAL, 2, a);
 
-
     if (V8_ISERROR(ret)) {
         fprintf(stderr, "GObject (gtk2) callback: %s\n", V8_ERRSTR(ret));
     } else if (return_value) {
@@ -201,19 +200,11 @@ do_xflush(v8_state vm, int argc, v8_val argv[]) {
     return V8_VOID;
 }
 
-// called when X connection becomes readable
+/* Called when X connection becomes readable */
 static v8_val
 do_pending_events(v8_state vm, int argc, v8_val argv[]) {
-#if 0
-    GdkEvent *event;
-    while ((event = gdk_event_get()) != NULL) {
-        gtk_main_do_event(event);
-        gdk_event_free(event);
-    }
-#else
     while (gtk_events_pending())
         gtk_main_iteration();
-#endif
     return V8_VOID;
 }
 
@@ -239,7 +230,6 @@ do_gobject_ref_sink(v8_state vm, int argc, v8_val argv[]) {
     return V8_VOID;
 }
 
-// Debugging
 static v8_val
 do_gobject_unref(v8_state vm, int argc, v8_val argv[]) {
     void *ptr = V8_TOPTR(argv[0]);
@@ -251,7 +241,7 @@ do_gobject_unref(v8_state vm, int argc, v8_val argv[]) {
     return V8_VOID;
 }
 
-// check if js val is a GObject
+/* Check if JS value is a GObject */
 static int
 is_js_gobject(v8_state vm, v8_val val) {
     v8_val a[1];
@@ -562,14 +552,14 @@ do_gtype_name(v8_state vm, int argc, v8_val argv[]) {
     return V8_STR(name, strlen(name));
 }
 
-// N.B: returns 0 if no type has been registered yet.
+/* N.B.: returns 0 if no type has been registered yet. */
 static v8_val
 do_gtype_from_name(v8_state vm, int argc, v8_val argv[]) {
     char *name = V8_TOSTR(argv[0]);
     GType gtype = g_type_from_name(name);
     if (gtype > (1UL << 53)) {
         // Gtype is a gsize (ulong).
-        fprintf(stderr, "GType does not fit in double exactly\n");
+        fprintf(stderr, "Error: GType does not fit in double exactly.\n");
         exit(1);
     }
     return V8_DOUBLE(gtype);
@@ -587,7 +577,7 @@ do_gtype_is_a(v8_state vm, int argc, v8_val argv[]) {
     return V8_INT32(r);
 }
 
-// N.B.: GObject only?
+/* GObject only? */
 static v8_val
 do_gtype_instance_size(v8_state vm, int argc, v8_val argv[]) {
     GType gtype = V8_TODOUBLE(argv[0]);

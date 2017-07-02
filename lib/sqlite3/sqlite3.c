@@ -29,13 +29,14 @@ do_sqlite3_close(v8_state vm, v8_coro cr, int argc, v8_val args[]) {
         jsv8->goresolve(vm, cr, V8_VOID, 1);
 }
 
-/* XXX: unlike prepare(), can have multiple sql statements seperated by semi */
+/* XXX: unlike prepare(), can have multiple sql statements seperated by semi. */
 coroutine static void
 do_sqlite3_exec(v8_state vm, v8_coro cr, int argc, v8_val args[]) {
     sqlite3 *db = V8_TOPTR(args[0]);
     char *query = V8_TOSTR(args[1]);
     char *errmsg;
-    if (sqlite3_exec(db, query, 0, 0, & errmsg) != SQLITE_OK) {
+    /* callback is not used i.e. no result rows returned */
+    if (sqlite3_exec(db, query, NULL, NULL, & errmsg) != SQLITE_OK) {
         jsv8->goreject(vm, cr, errmsg);
         sqlite3_free(errmsg);
     } else
@@ -76,19 +77,16 @@ do_sqlite3_reset(v8_state vm, v8_coro cr, int argc, v8_val args[]) {
         jsv8->goresolve(vm, cr, V8_VOID, 1);
 }
 
-coroutine static void
-do_sqlite3_bind(v8_state vm, v8_coro cr, int argc, v8_val args[]) {
-    sqlite3_stmt *stmt = V8_TOPTR(args[0]);
-    char *fmt = V8_TOSTR(args[1]);
+static int
+_bind(sqlite3_stmt *stmt, const char *fmt, const char *bp) {
     int nitems = strlen(fmt);
-    char *bp = V8_TOPTR(args[2]);
     int i, ret = SQLITE_OK;
     char *sp;
 
-    sqlite3_reset(stmt);    // XXX: needed if reusing prepared statements
-    sqlite3_clear_bindings(stmt);
+    if (!fmt)
+        return ret;
 
-    for (i = 1, sp = bp; i <= nitems; i++, fmt++) {
+    for (i = 1, sp = (char *)bp; i <= nitems && ret == SQLITE_OK; i++, fmt++) {
         switch (*fmt) {
         case 'i':
             ret = sqlite3_bind_int(stmt, i, *((int *) sp));
@@ -123,12 +121,23 @@ do_sqlite3_bind(v8_state vm, v8_coro cr, int argc, v8_val args[]) {
             ret = SQLITE_ERROR;
             break;
         }
-        if (ret != SQLITE_OK) {
-            jsv8->goreject(vm, cr, sqlite3_errstr(ret));
-            return;
-        }
     }
-    jsv8->goresolve(vm, cr, V8_VOID, 1);
+    return ret;
+}
+
+coroutine static void
+do_sqlite3_bind(v8_state vm, v8_coro cr, int argc, v8_val args[]) {
+    sqlite3_stmt *stmt = V8_TOPTR(args[0]);
+    char *fmt = V8_ISSTRING(args[1]) ? V8_TOSTR(args[1]) : NULL;
+    char *bp = V8_TOPTR(args[2]);
+
+    sqlite3_reset(stmt);    // XXX: needed if reusing prepared statements
+    sqlite3_clear_bindings(stmt);
+    int ret = _bind(stmt, fmt, bp);
+    if (ret != SQLITE_OK)
+        jsv8->goreject(vm, cr, sqlite3_errstr(ret));
+    else
+        jsv8->goresolve(vm, cr, V8_VOID, 1);
 }
 
 
@@ -229,6 +238,48 @@ do_sqlite3_next(v8_state vm, v8_coro cr, int argc, v8_val args[]) {
     }
 }
 
+/* returns a single result row  */ 
+coroutine static void
+do_sqlite3_get(v8_state vm, v8_coro cr, int argc, v8_val args[]) {
+    sqlite3 *db = V8_TOPTR(args[0]);
+    char *query = V8_TOSTR(args[1]);
+    char *fmt = NULL;
+    int qlen = strlen(query);
+    sqlite3_stmt *stmt;
+    int ret;
+
+    if (V8_ISSTRING(args[2]))
+        fmt = V8_TOSTR(args[2]);
+
+    ret = sqlite3_prepare_v2(db, query, qlen, & stmt, 0);
+    if (ret != SQLITE_OK) {
+        jsv8->goreject(vm, cr, sqlite3_errstr(ret));
+        return;
+    }
+    if (fmt && (ret = _bind(stmt, fmt, V8_TOPTR(args[3]))) != SQLITE_OK) {
+        jsv8->goreject(vm, cr, sqlite3_errstr(ret));
+        return;
+    }
+
+    ret = sqlite3_step(stmt);
+    if (ret == SQLITE_DONE) {
+        jsv8->goresolve(vm, cr, V8_NULL, 1);
+    } else if (ret == SQLITE_ROW) {
+        int i, ncols = sqlite3_column_count(stmt);
+        struct fb_buffer b = {0};
+        assert(ncols >= 0); /* ncols == 0 ->  empty result set (UNLIKELY??) */
+        init_buffer(&b, ncols);
+        for (i = 0; i < ncols; i++) {
+            write_column(stmt, i, sqlite3_column_type(stmt, i), &b);
+        }
+        jsv8->goresolve(vm, cr, V8_BUFFER(b.buf, b.len), 1);
+    } else {
+        jsv8->goreject(vm, cr, sqlite3_errstr(ret));
+    }
+    ret = sqlite3_finalize(stmt);
+    if (ret != SQLITE_OK)
+        fprintf(stderr, "warning: sqlite3_finalize: %s\n", sqlite3_errstr(ret));
+}
 
 /* step and fetch N result rows */
 coroutine static void
@@ -272,6 +323,7 @@ static v8_ffn ff_table[] = {
     {1, do_sqlite3_open, "open", FN_CORO},
     {1, do_sqlite3_close, "close", FN_CORO},
     {2, do_sqlite3_exec, "exec", FN_CORO},
+    {4, do_sqlite3_get, "get", FN_CORO},
     {3, do_sqlite3_prepare, "prepare", FN_CORO},
     {1, do_sqlite3_finalize, "finalize", FN_CORO},
     {1, do_sqlite3_reset, "reset", FN_CORO},

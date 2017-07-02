@@ -5,7 +5,7 @@ fetch({host: 'www.google.com'})
 .then((resp) => {
     resp.headers()
     .then((h) => {
-        // $print(h);
+//        $print(h);
         return resp.body();
     })
     .then((b) => {
@@ -14,10 +14,11 @@ fetch({host: 'www.google.com'})
 });
 
 
-fetch({ host: 'news.google.com', schema: 'https'} )
+fetch({ host: 'news.google.com', path: '/news/?ned=us&hl=en', schema: 'https'} )
 .then((resp) => {
     resp.headers()
     .then((h) => {
+        // $print(h);
         return resp.body();
     })
     .then((b) => {
@@ -27,20 +28,22 @@ fetch({ host: 'news.google.com', schema: 'https'} )
 });
 
 
-(async function (url) {
+async function chunky(url) {
     try {
         let resp = await fetch(url);
         let msg_headers = await resp.headers();
         //$print(msg_headers);
-        console.log(`transfer-encoding: ${url.host} =`,
+        console.log(`transfer-encoding: ${url.host} ->`,
                 parse(msg_headers).get('transfer-encoding'));
         var b = await resp.body();
         $print(`Content-Length: ${resp.url}:`, $length(b));
     } catch (e) {
         $print(url.host, ':', e);
     }
-})({ host: 'www.aol.com', schema: 'https' });  // chunked encoding
+}
 
+chunky({ host: 'thehill.com'});
+chunky({ host: 'www.aol.com', schema: 'https' });
 
 (async function (url) {
     try {
