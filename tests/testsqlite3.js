@@ -7,6 +7,11 @@ const sqlite3 = require('../lib/sqlite3.js');
         let version = (await dbh.get("select sqlite_version()"))[0];
         console.log('SQLite3 Version:', version);
 
+        let [v] = await dbh.transaction(db => {
+            return db.get("select sqlite_version()");
+        });
+        console.log('SQLite3 Version:', v);
+
         let sth = await dbh.prepare(
                     "select customerNumber, customerName from customers");
         let count = 0;
